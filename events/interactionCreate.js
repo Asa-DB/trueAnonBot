@@ -17,6 +17,10 @@ module.exports = {
         const command = interaction.client.commands.get(interaction.commandName);
 
         if (!command) {
+          await interaction.reply({
+            content: 'that command is not available anymore on this bot. run `npm run deploy` to refresh the slash commands.',
+            ephemeral: true,
+          }).catch(() => null);
           return;
         }
 

@@ -13,6 +13,7 @@ const {
 const {
   buildReviewButtons,
   buildReviewEmbed,
+  getApprovedSubmissionsByUserId,
   getLiveSubmission,
   getSubmissionByThreadId,
   patchLiveSubmission,
@@ -23,6 +24,7 @@ const threadLastActive = {};
 const infoRequests = new Map();
 const DEAD_MS = 8 * 60 * 60 * 1000;
 const MANAGED_PREFIX = 'anon post ';
+const FOLLOW_UP_LIMIT = 1500;
 
 function canModerate(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads);
@@ -102,7 +104,7 @@ async function approveSubmission(interaction, submission) {
   });
 
   await thread.send({
-    content: 'mods can close this if the thread is done',
+    content: 'mods can use `Resolved` when the issue is handled, or `Close Thread` when they just need to shut the thread down.',
     components: [closeRow],
   });
 
@@ -132,8 +134,13 @@ async function approveSubmission(interaction, submission) {
     await sender.send([
       'your vent was approved and posted.',
       'the post is still anonymous to the public and moderators.',
+      `submission id: ${submission.submissionId}`,
+      '',
+      'to add an anonymous follow-up, DM me your message.',
+      'if you ever have more than one open vent, start the DM with the submission id like this:',
+      `${submission.submissionId}: your follow-up here`,
+      '',
       'if a moderator needs more information, the bot may DM you and relay your reply without showing your username.',
-      `thread: <#${thread.id}>`,
     ].join('\n')).catch(() => null);
   }
 }
@@ -283,6 +290,16 @@ async function handleCloseButton(interaction) {
     components: [],
   });
 
+  const submission = getSubmissionByThreadId(interaction.channel.id);
+
+  if (submission) {
+    patchLiveSubmission(submission.submissionId, {
+      status: 'closed',
+      closedAt: new Date().toISOString(),
+      closedBy: interaction.user.id,
+    });
+  }
+
   clearInfoRequestForThread(interaction.channel.id);
   delete threadLastActive[interaction.channel.id];
   removeSubmissionByThreadId(interaction.channel.id);
@@ -312,6 +329,18 @@ async function handleResolvedButton(interaction) {
     content: `thread resolved by <@${interaction.user.id}>`,
     components: [],
   });
+
+  const submission = getSubmissionByThreadId(interaction.channel.id);
+
+  if (submission) {
+    patchLiveSubmission(submission.submissionId, {
+      status: 'resolved',
+      resolvedAt: new Date().toISOString(),
+      resolvedBy: interaction.user.id,
+      closedAt: new Date().toISOString(),
+      closedBy: interaction.user.id,
+    });
+  }
 
   clearInfoRequestForThread(interaction.channel.id);
   delete threadLastActive[interaction.channel.id];
@@ -404,6 +433,15 @@ async function handleRequestMoreInfoModal(interaction) {
   }
 
   const question = interaction.fields.getTextInputValue('moreinfo-question').trim();
+
+  if (!question) {
+    await interaction.reply({
+      content: 'type a question first',
+      ephemeral: true,
+    });
+    return;
+  }
+
   const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
 
   if (!sender) {
@@ -445,17 +483,69 @@ async function handleRequestMoreInfoModal(interaction) {
   });
 }
 
-async function handleMoreInfoDmReply(message) {
-  if (message.author.bot || message.guildId) {
-    return;
+function parseDmFollowup(rawText) {
+  const text = rawText.trim();
+
+  if (!text) {
+    return null;
   }
 
-  const pending = infoRequests.get(message.author.id);
+  const withId = text.match(/^#?([a-z0-9]{6,16})\s*[:\-]\s*([\s\S]+)/i);
 
-  if (!pending) {
-    return;
+  if (!withId) {
+    return {
+      submissionId: null,
+      body: text,
+    };
   }
 
+  return {
+    submissionId: withId[1].toUpperCase(),
+    body: withId[2].trim(),
+  };
+}
+
+function formatSubmissionChoices(items) {
+  return items.map((item) => `- ${item.submissionId}`).join('\n');
+}
+
+function pickFollowupTarget(userId, rawText) {
+  const parsed = parseDmFollowup(rawText);
+
+  if (!parsed || !parsed.body) {
+    return { error: 'empty' };
+  }
+
+  const openOnes = getApprovedSubmissionsByUserId(userId);
+
+  if (!openOnes.length) {
+    return { error: 'none' };
+  }
+
+  if (parsed.submissionId) {
+    const match = openOnes.find((item) => item.submissionId === parsed.submissionId);
+
+    if (!match) {
+      return { error: 'bad-id', choices: openOnes };
+    }
+
+    return {
+      target: match,
+      body: parsed.body,
+    };
+  }
+
+  if (openOnes.length > 1) {
+    return { error: 'need-id', choices: openOnes };
+  }
+
+  return {
+    target: openOnes[0],
+    body: parsed.body,
+  };
+}
+
+async function relayMoreInfoReply(message, pending) {
   const text = message.content.trim();
 
   if (!text) {
@@ -488,6 +578,78 @@ async function handleMoreInfoDmReply(message) {
 
   infoRequests.delete(message.author.id);
   await message.channel.send('sent back through the bot without showing your username');
+}
+
+async function postAnonFollowup(message) {
+  const picked = pickFollowupTarget(message.author.id, message.content);
+
+  if (picked.error === 'empty') {
+    return;
+  }
+
+  if (picked.error === 'none') {
+    return;
+  }
+
+  if (picked.error === 'need-id') {
+    await message.channel.send([
+      'you have more than one open vent thread.',
+      'start your message with the submission id like `ABC123: your follow-up`.',
+      '',
+      'open submission ids:',
+      formatSubmissionChoices(picked.choices),
+    ].join('\n'));
+    return;
+  }
+
+  if (picked.error === 'bad-id') {
+    await message.channel.send([
+      'i could not match that submission id to one of your open vents.',
+      'use one of these:',
+      formatSubmissionChoices(picked.choices),
+    ].join('\n'));
+    return;
+  }
+
+  if (picked.body.length > FOLLOW_UP_LIMIT) {
+    await message.channel.send(`keep follow-ups under ${FOLLOW_UP_LIMIT} characters`);
+    return;
+  }
+
+  const thread = await message.client.channels.fetch(picked.target.threadId).catch(() => null);
+
+  if (!thread || !thread.isThread() || thread.archived || thread.locked) {
+    await message.channel.send('that vent thread is closed, so i did not post the follow-up');
+    removeSubmissionByThreadId(picked.target.threadId);
+    return;
+  }
+
+  const sent = await thread.send({
+    content: `**anonymous follow-up**\n${picked.body}`,
+  }).then(() => true).catch(() => false);
+
+  if (!sent) {
+    await message.channel.send('something broke while posting that follow-up');
+    return;
+  }
+
+  threadLastActive[thread.id] = Date.now();
+  await message.channel.send(`posted your anonymous follow-up to ${picked.target.submissionId}`);
+}
+
+async function handleDirectMessage(message) {
+  if (message.author.bot || message.guildId) {
+    return;
+  }
+
+  const pending = infoRequests.get(message.author.id);
+
+  if (pending) {
+    await relayMoreInfoReply(message, pending);
+    return;
+  }
+
+  await postAnonFollowup(message);
 }
 
 function noteThreadStuff(message) {
@@ -566,7 +728,7 @@ function startDeadThreadLoop(client) {
 
 module.exports = {
   checkDeadThreads,
-  handleMoreInfoDmReply,
+  handleDirectMessage,
   handleRejectModal,
   handleResolvedButton,
   handleCloseButton,

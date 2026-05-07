@@ -46,6 +46,7 @@ STICKY_INTERVAL_MINUTES=10
 - the mod review message has approve and reject buttons
 - rejection can include an optional typed-out moderator reason that gets DMd back
 - approval creates a forum post and keeps the sender hidden from the public thread
+- after approval, the original poster can DM the bot to add anonymous follow-ups without moderator approval
 - moderators can request more information and the bot relays the answer back in DMs
 - mods can close or resolve a thread with buttons
 - dead threads get auto-locked after 8 hours with no new messages
@@ -59,7 +60,10 @@ STICKY_INTERVAL_MINUTES=10
 - this is not anonymity from discord, and it is not anonymity from anyone with direct access to the bot process or host
 - it does not store the sender link on disk. it only keeps that link in memory while the bot is running, so if the bot restarts it loses pending review state and follow-up DM routing for older vents.
 
-These are all functional limitations
+## thread actions
+
+- `Close Thread`: shuts the thread down without saying the issue was solved
+- `Resolved`: marks it as handled and then shuts the thread down
 
 ## bot permissions
 

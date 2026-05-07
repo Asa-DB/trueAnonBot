@@ -1,11 +1,11 @@
-const { handleMoreInfoDmReply, noteThreadStuff } = require('../handlers/threadHandler');
+const { handleDirectMessage, noteThreadStuff } = require('../handlers/threadHandler');
 
 module.exports = {
   name: 'messageCreate',
 
   async execute(message) {
     try {
-      await handleMoreInfoDmReply(message);
+      await handleDirectMessage(message);
       noteThreadStuff(message);
     } catch (error) {
       console.error('message handler failed');

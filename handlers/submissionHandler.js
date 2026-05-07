@@ -57,6 +57,24 @@ function getSubmissionByThreadId(threadId) {
   return null;
 }
 
+function getApprovedSubmissionsByUserId(userId) {
+  const hits = [];
+
+  for (const item of livePosts.values()) {
+    if (item.userId !== userId) {
+      continue;
+    }
+
+    if (item.status !== 'approved' || !item.threadId) {
+      continue;
+    }
+
+    hits.push(item);
+  }
+
+  return hits;
+}
+
 function patchLiveSubmission(submissionId, bits) {
   const item = livePosts.get(submissionId);
 
@@ -256,6 +274,7 @@ async function handleSubmitConfirmButton(interaction) {
 module.exports = {
   buildReviewButtons,
   buildReviewEmbed,
+  getApprovedSubmissionsByUserId,
   getLiveSubmission,
   getSubmissionByThreadId,
   handleSubmitConfirmButton,
