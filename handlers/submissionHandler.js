@@ -9,8 +9,15 @@ const {
 } = require('discord.js');
 
 const { makeSubmissionId } = require('../utils/idGenerator');
-const confirmQueue = new Map();
-const livePosts = new Map();
+const runtimeStore = require('../utils/runtimeStore');
+
+const savedState = runtimeStore.readState();
+const confirmQueue = new Map(savedState.confirmQueue.map((item) => [item.submissionId, item]));
+const livePosts = new Map(savedState.livePosts.map((item) => [item.submissionId, item]));
+
+function saveState() {
+  runtimeStore.saveSubmissionState(confirmQueue, livePosts);
+}
 
 function buildReviewEmbed(submission) {
   return new EmbedBuilder()
@@ -22,7 +29,7 @@ function buildReviewEmbed(submission) {
       { name: 'status', value: submission.status, inline: true },
       {
         name: 'how anonymous is this',
-        value: 'mods and the public do not see the sender from this post. the bot can still DM the sender for follow-up.',
+        value: 'mostly anonymous in normal server use. mods and the public do not see the sender here, but discord and the bot still have technical limits.',
       },
     )
     .setTimestamp(new Date(submission.createdAt));
@@ -83,11 +90,13 @@ function patchLiveSubmission(submissionId, bits) {
   }
 
   Object.assign(item, bits);
+  saveState();
   return item;
 }
 
 function removeLiveSubmission(submissionId) {
   livePosts.delete(submissionId);
+  saveState();
 }
 
 function removeSubmissionByThreadId(threadId) {
@@ -98,7 +107,30 @@ function removeSubmissionByThreadId(threadId) {
   }
 
   livePosts.delete(item.submissionId);
+  saveState();
   return item;
+}
+
+function savePendingSubmission(submission) {
+  confirmQueue.set(submission.submissionId, submission);
+  saveState();
+}
+
+function consumePendingSubmission(submissionId) {
+  const item = confirmQueue.get(submissionId) || null;
+
+  if (!item) {
+    return null;
+  }
+
+  confirmQueue.delete(submissionId);
+  saveState();
+  return item;
+}
+
+function saveLiveSubmission(submission) {
+  livePosts.set(submission.submissionId, submission);
+  saveState();
 }
 
 function formatChannelList(ids) {
@@ -192,9 +224,9 @@ async function handleSubmitModal(interaction) {
     await interaction.user.send({
       content: [
         'hey, before i send this:',
-        '- moderators and the public will not see your username from the vent',
-        '- the bot still knows your account so it can DM you if mods ask for more info',
-        '- this does not hide you from discord or from whoever runs the bot',
+        '- your username stays hidden from the vent and from the normal mod review flow',
+        '- if mods need more information later, i can DM you and relay your reply without putting your username in the thread',
+        '- if your vent gets approved, you can DM me follow-ups and i will post them anonymously',
         '',
         'send this to mods?',
         '',
@@ -211,22 +243,22 @@ async function handleSubmitModal(interaction) {
     return;
   }
 
-  confirmQueue.set(data.submissionId, {
+  savePendingSubmission({
     ...data,
     dmUserId: interaction.user.id,
   });
 
   await interaction.reply({
-    content: 'check your dms first. that message also explains exactly what stays anonymous and what does not.',
+    content: 'check your dms first to confirm it',
     ephemeral: true,
   });
 }
 
 async function handleSubmitConfirmButton(interaction) {
   const [, action, submissionId] = interaction.customId.split(':');
-  const data = confirmQueue.get(submissionId);
+  const current = confirmQueue.get(submissionId);
 
-  if (!data || data.dmUserId !== interaction.user.id) {
+  if (!current || current.dmUserId !== interaction.user.id) {
     await interaction.reply({
       content: 'that submit prompt is dead now',
       ephemeral: true,
@@ -234,7 +266,7 @@ async function handleSubmitConfirmButton(interaction) {
     return;
   }
 
-  confirmQueue.delete(submissionId);
+  const data = consumePendingSubmission(submissionId);
 
   if (action === 'cancel') {
     await interaction.update({
@@ -259,7 +291,7 @@ async function handleSubmitConfirmButton(interaction) {
     components: [buildReviewButtons(data.submissionId)],
   });
 
-  livePosts.set(data.submissionId, {
+  saveLiveSubmission({
     ...data,
     reviewChannelId: reviewMessage.channelId,
     reviewMessageId: reviewMessage.id,

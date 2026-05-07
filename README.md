@@ -1,6 +1,6 @@
 # true anon bot
 
-small discord bot for anonymous vents, mod review, and forum threads
+small discord bot for mostly anonymous vents, mod review, and forum threads
 
 ## setup
 
@@ -42,6 +42,7 @@ STICKY_INTERVAL_MINUTES=10
 ## what it does
 
 - `/submit` opens a modal for an anonymous vent
+- `/reply` explains how to send an anonymous follow-up now
 - the bot asks for DM confirmation before it sends anything
 - the mod review message has approve and reject buttons
 - rejection can include an optional typed-out moderator reason that gets DMd back
@@ -54,11 +55,14 @@ STICKY_INTERVAL_MINUTES=10
 
 ## how anonymous it really is
 
+- this is mostly anonymous in normal server use, not perfect anonymity
 - the public forum thread does not show who sent the vent
 - moderators using the bot do not get shown the sender identity in the review flow, thread tools, or follow-up relay
 - the bot itself still has to know which discord account sent the vent so it can DM confirmations, rejection reasons, and follow-up questions
 - this is not anonymity from discord, and it is not anonymity from anyone with direct access to the bot process or host
-- it does not store the sender link on disk. it only keeps that link in memory while the bot is running, so if the bot restarts it loses pending review state and follow-up DM routing for older vents.
+- those limits are not this bot being weird, they are basic limits of how discord and discord bots fundamentally work
+- to keep DM follow-ups and moderator relays working reliably, the bot stores the active sender-to-thread routing on disk while a vent is open
+- once a vent is rejected, closed, resolved, or auto-closed, that active routing is removed
 
 ## thread actions
 

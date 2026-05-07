@@ -20,11 +20,25 @@ const {
   removeLiveSubmission,
   removeSubmissionByThreadId,
 } = require('./submissionHandler');
+const runtimeStore = require('../utils/runtimeStore');
 const threadLastActive = {};
-const infoRequests = new Map();
+const savedState = runtimeStore.readState();
+const infoRequests = new Map(savedState.infoRequests.map((item) => [
+  item.userId,
+  {
+    threadId: item.threadId,
+    moderatorId: item.moderatorId,
+    question: item.question,
+    submissionId: item.submissionId,
+  },
+]));
 const DEAD_MS = 8 * 60 * 60 * 1000;
 const MANAGED_PREFIX = 'anon post ';
 const FOLLOW_UP_LIMIT = 1500;
+
+function saveInfoRequests() {
+  runtimeStore.saveInfoRequestState(infoRequests);
+}
 
 function canModerate(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads);
@@ -100,7 +114,7 @@ async function approveSubmission(interaction, submission) {
 
   // just drop a message so people behave lol
   await thread.send({
-    content: 'This vent was posted anonymously. The public and the thread do not show who sent it. Moderators can ask follow-up questions through the bot without exposing the sender.',
+    content: 'This vent is mostly anonymous in normal server use. The public and the thread do not show who sent it. Discord and the bot still have technical limits, and moderators can ask follow-up questions through the bot without exposing the sender in the thread.',
   });
 
   await thread.send({
@@ -133,14 +147,15 @@ async function approveSubmission(interaction, submission) {
   if (sender) {
     await sender.send([
       'your vent was approved and posted.',
-      'the post is still anonymous to the public and moderators.',
+      'the post is still mostly anonymous to the public and moderators in normal server use.',
       `submission id: ${submission.submissionId}`,
       '',
       'to add an anonymous follow-up, DM me your message.',
       'if you ever have more than one open vent, start the DM with the submission id like this:',
       `${submission.submissionId}: your follow-up here`,
       '',
-      'if a moderator needs more information, the bot may DM you and relay your reply without showing your username.',
+      'if a moderator needs more information, the bot may DM you and relay your reply without showing your username in the thread.',
+      'discord itself and whoever runs the bot are still technical limits here, because that is how discord bots fundamentally work.',
     ].join('\n')).catch(() => null);
   }
 }
@@ -359,6 +374,8 @@ function clearInfoRequestForThread(threadId) {
       infoRequests.delete(userId);
     }
   }
+
+  saveInfoRequests();
 }
 
 async function handleRequestMoreInfoButton(interaction) {
@@ -459,7 +476,8 @@ async function handleRequestMoreInfoModal(interaction) {
     question,
     '',
     'reply in this DM and i will forward your answer without showing your username.',
-    'the vent stays anonymous to the public and to moderators in normal bot use.',
+    'the vent stays mostly anonymous to the public and to moderators in normal bot use.',
+    'discord itself and whoever runs the bot are still technical limits, because that is how discord bots fundamentally work.',
   ].join('\n')).then(() => true).catch(() => false);
 
   if (!dmWorked) {
@@ -476,11 +494,27 @@ async function handleRequestMoreInfoModal(interaction) {
     question,
     submissionId: submission.submissionId,
   });
+  saveInfoRequests();
 
   await interaction.reply({
     content: 'question sent in DM. their username is not shown in the thread or in the relay.',
     ephemeral: true,
   });
+}
+
+function pullMessageBody(message) {
+  const bits = [];
+  const text = message.content.trim();
+
+  if (text) {
+    bits.push(text);
+  }
+
+  if (message.attachments.size) {
+    bits.push(message.attachments.map((item) => item.url).join('\n'));
+  }
+
+  return bits.join('\n').trim();
 }
 
 function parseDmFollowup(rawText) {
@@ -546,10 +580,10 @@ function pickFollowupTarget(userId, rawText) {
 }
 
 async function relayMoreInfoReply(message, pending) {
-  const text = message.content.trim();
+  const text = pullMessageBody(message);
 
   if (!text) {
-    await message.channel.send('send some text and i will pass it back anonymously');
+    await message.channel.send('send text, an attachment, or both and i will pass it back anonymously');
     return;
   }
 
@@ -577,17 +611,24 @@ async function relayMoreInfoReply(message, pending) {
   }
 
   infoRequests.delete(message.author.id);
+  saveInfoRequests();
   await message.channel.send('sent back through the bot without showing your username');
 }
 
 async function postAnonFollowup(message) {
-  const picked = pickFollowupTarget(message.author.id, message.content);
+  const body = pullMessageBody(message);
+  const picked = pickFollowupTarget(message.author.id, body);
 
   if (picked.error === 'empty') {
+    await message.channel.send('send text, an attachment, or both and i will post it as an anonymous follow-up');
     return;
   }
 
   if (picked.error === 'none') {
+    await message.channel.send([
+      'i could not find an open approved vent thread for you.',
+      'if a mod approved your vent before the bot restarted, ask them to approve again or open a new vent.',
+    ].join('\n'));
     return;
   }
 
