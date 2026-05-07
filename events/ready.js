@@ -1,4 +1,5 @@
 const { checkDeadThreads, startDeadThreadLoop } = require('../handlers/threadHandler');
+const { startStickyLoop } = require('../handlers/stickyHandler');
 
 module.exports = {
   name: 'ready',
@@ -8,5 +9,6 @@ module.exports = {
     console.log(`logged in as ${client.user.tag}`);
     await checkDeadThreads(client);
     startDeadThreadLoop(client);
+    startStickyLoop(client);
   },
 };

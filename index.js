@@ -16,6 +16,16 @@ function splitIds(raw) {
     .filter(Boolean);
 }
 
+function readStickyMinutes(raw) {
+  const num = Number(raw);
+
+  if (!Number.isFinite(num) || num <= 0) {
+    return 10;
+  }
+
+  return num;
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -32,6 +42,9 @@ client.botConfig = {
   submitChannelIds: splitIds(process.env.VENT_COMMAND_CHANNEL_IDS || process.env.SUBMIT_CHANNEL_IDS),
   modQueueChannelId: process.env.VENT_REVIEW_CHANNEL_ID || process.env.MOD_QUEUE_CHANNEL_ID,
   forumChannelId: process.env.VENT_FORUM_CHANNEL_ID || process.env.FORUM_CHANNEL_ID,
+  stickyChannelId: process.env.STICKY_CHANNEL_ID || '',
+  stickyMessage: (process.env.STICKY_MESSAGE || '').replace(/\\n/g, '\n'),
+  stickyIntervalMs: readStickyMinutes(process.env.STICKY_INTERVAL_MINUTES) * 60 * 1000,
 };
 
 const commandsPath = path.join(__dirname, 'commands');
