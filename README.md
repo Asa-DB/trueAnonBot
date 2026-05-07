@@ -1,10 +1,10 @@
 # true anon bot
 
-small discord bot for anonymous posts, mod review, and forum threads
+small discord bot for anonymous vents, mod review, and forum threads
 
 ## setup
 
-1. install deps
+1. open a terminal in this project folder and install deps
    ```bash
    npm install
    ```
@@ -17,19 +17,44 @@ small discord bot for anonymous posts, mod review, and forum threads
    ```bash
    npm start
    ```
+   
+```
+
+## env
+
+```env
+DISCORD_TOKEN=your_bot_token
+CLIENT_ID=your_application_id
+GUILD_ID=your_server_id
+VENT_COMMAND_CHANNEL_IDS=channel_id_one,channel_id_two
+VENT_REVIEW_CHANNEL_ID=private_mod_channel_id
+VENT_FORUM_CHANNEL_ID=forum_channel_id
+```
+
+- `VENT_COMMAND_CHANNEL_IDS`: comma-separated channel ids where `/submit` is allowed
+- `VENT_REVIEW_CHANNEL_ID`: private mod channel where approve/reject messages go
+- `VENT_FORUM_CHANNEL_ID`: forum channel where approved vents get posted
 
 ## what it does
 
-- `/submit` opens a modal for an anonymous submission
-- the bot drops that into a private mod queue with approve and reject buttons
-- approval creates a forum post and keeps the user anonymous
-- approved threads get a little anonymous reminder message so people chill out
-- `/reply` lets the original submitter post anon follow-ups inside their own thread
-- each user keeps the same anon id per server like `anon-1234`
-- `/search-anon` lets mods pull all submissions tied to one anon id
-- mods can ask for more info from the original user and the dm reply gets shoved back into the thread
+- `/submit` opens a modal for an anonymous vent
+- the bot asks for DM confirmation before it sends anything
+- the mod review message has approve and reject buttons
+- rejection can include an optional typed-out moderator reason that gets DMd back
+- approval creates a forum post and keeps the sender hidden from the public thread
+- moderators can request more information and the bot relays the answer back in DMs
 - mods can close or resolve a thread with buttons
-- dead threads get auto-locked after 8 hours of inactivity
+- dead threads get auto-locked after 8 hours with no new messages
+
+## how anonymous it really is
+
+- the public forum thread does not show who sent the vent
+- moderators using the bot do not get shown the sender identity in the review flow, thread tools, or follow-up relay
+- the bot itself still has to know which discord account sent the vent so it can DM confirmations, rejection reasons, and follow-up questions
+- this is not anonymity from discord, and it is not anonymity from anyone with direct access to the bot process or host
+- it does NOT store any data on the user. the sender link lives in memory only while the bot is running, so if the bot restarts it loses pending review state and follow-up DM routing for older vents.
+
+These are all functional limitations
 
 ## bot permissions
 
@@ -37,6 +62,7 @@ the bot should be able to:
 
 - use slash commands
 - send messages and embeds
+- send DMs
 - create public threads / forum posts
 - manage threads
 - read the mod queue channel

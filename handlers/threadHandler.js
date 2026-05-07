@@ -3,7 +3,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  EmbedBuilder,
   ModalBuilder,
   PermissionFlagsBits,
   TextInputBuilder,
@@ -11,20 +10,41 @@ const {
   ThreadAutoArchiveDuration,
 } = require('discord.js');
 
-const storage = require('../utils/storage');
-const { buildReviewButtons, buildReviewEmbed } = require('./submissionHandler');
-const waitingReplies = {};
+const {
+  buildReviewButtons,
+  buildReviewEmbed,
+  getLiveSubmission,
+  getSubmissionByThreadId,
+  patchLiveSubmission,
+  removeLiveSubmission,
+  removeSubmissionByThreadId,
+} = require('./submissionHandler');
 const threadLastActive = {};
+const infoRequests = new Map();
 const DEAD_MS = 8 * 60 * 60 * 1000;
+const MANAGED_PREFIX = 'anon post ';
 
 function canModerate(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads);
 }
 
 async function updateReviewMessage(interaction, submission, extraText) {
-  const updatedSubmission = storage.getSubmissionById(submission.submissionId);
+  const updatedSubmission = getLiveSubmission(submission.submissionId) || submission;
+  let targetMessage = interaction.message || null;
 
-  await interaction.message.edit({
+  if (!targetMessage && submission.reviewChannelId && submission.reviewMessageId) {
+    const reviewChannel = await interaction.client.channels.fetch(submission.reviewChannelId).catch(() => null);
+
+    if (reviewChannel && reviewChannel.isTextBased()) {
+      targetMessage = await reviewChannel.messages.fetch(submission.reviewMessageId).catch(() => null);
+    }
+  }
+
+  if (!targetMessage) {
+    return;
+  }
+
+  await targetMessage.edit({
     content: extraText,
     embeds: [buildReviewEmbed(updatedSubmission)],
     components: [buildReviewButtons(updatedSubmission.submissionId, true)],
@@ -53,12 +73,12 @@ async function approveSubmission(interaction, submission) {
   }
 
   const thread = await forumChannel.threads.create({
-    name: `anon case #${submission.anonId.slice(-4)}`,
+    name: `${MANAGED_PREFIX}${submission.submissionId.toLowerCase()}`,
     autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
     message: {
-      content: `**anon post**\n${submission.content}`,
+      content: `**anonymous post**\n${submission.content}`,
     },
-    reason: `approved anonymous submission ${submission.anonId}`,
+    reason: `approved anonymous submission ${submission.submissionId}`,
   });
 
   const closeRow = new ActionRowBuilder().addComponents(
@@ -78,7 +98,7 @@ async function approveSubmission(interaction, submission) {
 
   // just drop a message so people behave lol
   await thread.send({
-    content: 'This post was submitted anonymously. Please be respectful and helpful.',
+    content: 'This vent was posted anonymously. The public and the thread do not show who sent it. Moderators can ask follow-up questions through the bot without exposing the sender.',
   });
 
   await thread.send({
@@ -88,7 +108,7 @@ async function approveSubmission(interaction, submission) {
 
   threadLastActive[thread.id] = Date.now();
 
-  storage.updateSubmission(submission.submissionId, {
+  patchLiveSubmission(submission.submissionId, {
     status: 'approved',
     approvedAt: new Date().toISOString(),
     approvedBy: interaction.user.id,
@@ -105,23 +125,55 @@ async function approveSubmission(interaction, submission) {
     content: `approved and posted in <#${thread.id}>`,
     ephemeral: true,
   });
+
+  const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
+
+  if (sender) {
+    await sender.send([
+      'your vent was approved and posted.',
+      'the post is still anonymous to the public and moderators.',
+      'if a moderator needs more information, the bot may DM you and relay your reply without showing your username.',
+      `thread: <#${thread.id}>`,
+    ].join('\n')).catch(() => null);
+  }
 }
 
-async function rejectSubmission(interaction, submission) {
-  storage.updateSubmission(submission.submissionId, {
+async function rejectSubmission(interaction, submission, reasonText) {
+  const cleanReason = reasonText.trim();
+
+  patchLiveSubmission(submission.submissionId, {
     status: 'rejected',
     rejectedAt: new Date().toISOString(),
     rejectedBy: interaction.user.id,
+    rejectionReason: cleanReason || null,
   });
 
   await updateReviewMessage(
     interaction,
     submission,
-    `rejected by <@${interaction.user.id}>`,
+    cleanReason
+      ? `rejected by <@${interaction.user.id}> | reason sent`
+      : `rejected by <@${interaction.user.id}>`,
   );
 
+  const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
+  let dmWorked = false;
+
+  if (sender) {
+    dmWorked = await sender.send([
+      'your vent was rejected by a moderator.',
+      cleanReason ? `reason:\n${cleanReason}` : 'no reason was included.',
+      '',
+      'the moderator still does not get your username from the vent through the bot.',
+    ].join('\n')).then(() => true).catch(() => false);
+  }
+
+  removeLiveSubmission(submission.submissionId);
+
   await interaction.reply({
-    content: 'submission rejected',
+    content: dmWorked
+      ? 'submission rejected'
+      : 'submission rejected. i could not DM the sender, but their identity was not exposed.',
     ephemeral: true,
   });
 }
@@ -136,11 +188,11 @@ async function handleReviewButton(interaction) {
   }
 
   const [, action, submissionId] = interaction.customId.split(':');
-  const submission = storage.getSubmissionById(submissionId);
+  const submission = getLiveSubmission(submissionId);
 
   if (!submission) {
     await interaction.reply({
-      content: 'that submission is gone somehow',
+      content: 'that submission is gone. if the bot restarted, pending reviews do not survive it now.',
       ephemeral: true,
     });
     return;
@@ -160,55 +212,53 @@ async function handleReviewButton(interaction) {
   }
 
   if (action === 'reject') {
-    await rejectSubmission(interaction, submission);
+    const modal = new ModalBuilder()
+      .setCustomId(`submission:reject:modal:${submissionId}`)
+      .setTitle('reject vent');
+
+    const reasonInput = new TextInputBuilder()
+      .setCustomId('reject-reason')
+      .setLabel('optional reason to DM back')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setMaxLength(1000)
+      .setPlaceholder('type a reason if you want one sent back');
+
+    modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+    await interaction.showModal(modal);
   }
 }
 
-async function handleReplyCommand(interaction) {
-  if (!interaction.guildId) {
+async function handleRejectModal(interaction) {
+  if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'this only works inside a server',
+      content: 'you need Manage Threads for this',
       ephemeral: true,
     });
     return;
   }
 
-  if (!interaction.channel || !interaction.channel.isThread()) {
-    await interaction.reply({
-      content: 'use this inside an approved thread',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const submission = storage.getSubmissionByThreadId(interaction.channel.id);
+  const submissionId = interaction.customId.split(':')[3];
+  const submission = getLiveSubmission(submissionId);
 
   if (!submission) {
     await interaction.reply({
-      content: 'this thread is not linked to an anonymous submission',
+      content: 'that submission is gone. if the bot restarted, pending reviews do not survive it now.',
       ephemeral: true,
     });
     return;
   }
 
-  if (submission.userId !== interaction.user.id) {
+  if (submission.status !== 'pending') {
     await interaction.reply({
-      content: 'only the original submitter can use this here',
+      content: `this one is already ${submission.status}`,
       ephemeral: true,
     });
     return;
   }
 
-  const message = interaction.options.getString('message', true).trim();
-
-  await interaction.channel.send({
-    content: `**anon follow-up**\n${message}`,
-  });
-
-  await interaction.reply({
-    content: 'posted anonymously',
-    ephemeral: true,
-  });
+  const why = interaction.fields.getTextInputValue('reject-reason');
+  await rejectSubmission(interaction, submission, why);
 }
 
 async function handleCloseButton(interaction) {
@@ -228,21 +278,14 @@ async function handleCloseButton(interaction) {
     return;
   }
 
-  const submission = storage.getSubmissionByThreadId(interaction.channel.id);
-
-  if (submission) {
-    storage.updateSubmission(submission.submissionId, {
-      closedAt: new Date().toISOString(),
-      closedBy: interaction.user.id,
-    });
-  }
-
   await interaction.update({
     content: `thread closed by <@${interaction.user.id}>`,
     components: [],
   });
 
+  clearInfoRequestForThread(interaction.channel.id);
   delete threadLastActive[interaction.channel.id];
+  removeSubmissionByThreadId(interaction.channel.id);
   await interaction.channel.setLocked(true, `closed by ${interaction.user.tag}`);
   await interaction.channel.setArchived(true, `closed by ${interaction.user.tag}`);
 }
@@ -264,27 +307,29 @@ async function handleResolvedButton(interaction) {
     return;
   }
 
-  const submission = storage.getSubmissionByThreadId(interaction.channel.id);
-
-  if (submission) {
-    storage.updateSubmission(submission.submissionId, {
-      status: 'resolved',
-      resolvedAt: new Date().toISOString(),
-      resolvedBy: interaction.user.id,
-      closedAt: new Date().toISOString(),
-      closedBy: interaction.user.id,
-    });
-  }
-
   // mods said its done so just lock it
   await interaction.update({
     content: `thread resolved by <@${interaction.user.id}>`,
     components: [],
   });
 
+  clearInfoRequestForThread(interaction.channel.id);
   delete threadLastActive[interaction.channel.id];
+  removeSubmissionByThreadId(interaction.channel.id);
   await interaction.channel.setLocked(true, `resolved by ${interaction.user.tag}`);
   await interaction.channel.setArchived(true, `resolved by ${interaction.user.tag}`);
+}
+
+function isManagedAnonThread(thread) {
+  return thread.name.toLowerCase().startsWith(MANAGED_PREFIX);
+}
+
+function clearInfoRequestForThread(threadId) {
+  for (const [userId, request] of infoRequests.entries()) {
+    if (request.threadId === threadId) {
+      infoRequests.delete(userId);
+    }
+  }
 }
 
 async function handleRequestMoreInfoButton(interaction) {
@@ -304,11 +349,11 @@ async function handleRequestMoreInfoButton(interaction) {
     return;
   }
 
-  const submission = storage.getSubmissionByThreadId(interaction.channel.id);
+  const submission = getSubmissionByThreadId(interaction.channel.id);
 
   if (!submission) {
     await interaction.reply({
-      content: 'this thread is not linked to an anonymous submission',
+      content: 'i do not have the sender link for this vent anymore. if the bot restarted, follow-up DMs stop working for older vents.',
       ephemeral: true,
     });
     return;
@@ -318,16 +363,15 @@ async function handleRequestMoreInfoButton(interaction) {
     .setCustomId(`thread:moreinfo:modal:${interaction.channel.id}`)
     .setTitle('request more info');
 
-  const q = new TextInputBuilder()
+  const prompt = new TextInputBuilder()
     .setCustomId('moreinfo-question')
-    .setLabel('what do you want to ask')
+    .setLabel('what should the bot ask them')
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true)
     .setMaxLength(1000)
-    .setPlaceholder('ask whatever you need');
+    .setPlaceholder('type the exact question for the sender');
 
-  modal.addComponents(new ActionRowBuilder().addComponents(q));
-
+  modal.addComponents(new ActionRowBuilder().addComponents(prompt));
   await interaction.showModal(modal);
 }
 
@@ -340,88 +384,110 @@ async function handleRequestMoreInfoModal(interaction) {
     return;
   }
 
-  const parts = interaction.customId.split(':');
-  const threadId = parts[3];
-  const submission = storage.getSubmissionByThreadId(threadId);
+  const threadId = interaction.customId.split(':')[3];
+  const submission = getSubmissionByThreadId(threadId);
 
   if (!submission) {
     await interaction.reply({
-      content: 'could not find the linked submission anymore',
+      content: 'i do not have the sender link for this vent anymore.',
       ephemeral: true,
     });
     return;
   }
 
-  const q = interaction.fields.getTextInputValue('moreinfo-question').trim();
-  const u = await interaction.client.users.fetch(submission.userId).catch(() => null);
-
-  if (!u) {
+  if (infoRequests.has(submission.userId)) {
     await interaction.reply({
-      content: 'could not find that user',
+      content: 'there is already a follow-up question waiting on this sender.',
       ephemeral: true,
     });
     return;
   }
 
-  try {
-    // mod wants more info so we just dm them
-    await u.send(`mod question: ${q}`);
-  } catch (error) {
+  const question = interaction.fields.getTextInputValue('moreinfo-question').trim();
+  const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
+
+  if (!sender) {
     await interaction.reply({
-      content: 'could not dm that user',
+      content: 'i could not find the sender account anymore',
       ephemeral: true,
     });
     return;
   }
 
-  // storing temp reply state kinda messy but works
-  waitingReplies[submission.userId] = {
-    question: q,
+  const dmWorked = await sender.send([
+    'a moderator asked for more information about your anonymous vent.',
+    '',
+    'what they asked:',
+    question,
+    '',
+    'reply in this DM and i will forward your answer without showing your username.',
+    'the vent stays anonymous to the public and to moderators in normal bot use.',
+  ].join('\n')).then(() => true).catch(() => false);
+
+  if (!dmWorked) {
+    await interaction.reply({
+      content: 'i could not DM the sender',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  infoRequests.set(submission.userId, {
     threadId,
-  };
+    moderatorId: interaction.user.id,
+    question,
+    submissionId: submission.submissionId,
+  });
 
   await interaction.reply({
-    content: 'sent the question in dm',
+    content: 'question sent in DM. their username is not shown in the thread or in the relay.',
     ephemeral: true,
   });
 }
 
 async function handleMoreInfoDmReply(message) {
-  if (message.author.bot) {
+  if (message.author.bot || message.guildId) {
     return;
   }
 
-  if (message.guildId) {
-    return;
-  }
+  const pending = infoRequests.get(message.author.id);
 
-  const temp = waitingReplies[message.author.id];
-
-  if (!temp) {
+  if (!pending) {
     return;
   }
 
   const text = message.content.trim();
 
   if (!text) {
-    await message.channel.send('send some text and i will pass it to mods');
+    await message.channel.send('send some text and i will pass it back anonymously');
     return;
   }
 
-  const t = await message.client.channels.fetch(temp.threadId).catch(() => null);
+  const modUser = await message.client.users.fetch(pending.moderatorId).catch(() => null);
 
-  if (!t || !t.isTextBased()) {
-    delete waitingReplies[message.author.id];
-    await message.channel.send('could not find the mod thread anymore');
+  if (!modUser) {
+    await message.channel.send('i could not find the moderator who asked');
     return;
   }
 
-  await t.send({
-    content: `**reply to mod question**\nquestion: ${temp.question}\nreply: ${text}`,
-  });
+  const sent = await modUser.send([
+    `reply to your anonymous vent follow-up for submission ${pending.submissionId}`,
+    `thread: <#${pending.threadId}>`,
+    '',
+    'your question:',
+    pending.question,
+    '',
+    'their reply:',
+    text,
+  ].join('\n')).then(() => true).catch(() => false);
 
-  delete waitingReplies[message.author.id];
-  await message.channel.send('sent back to mods');
+  if (!sent) {
+    await message.channel.send('i could not DM the moderator who asked. ask them to enable DMs and try again.');
+    return;
+  }
+
+  infoRequests.delete(message.author.id);
+  await message.channel.send('sent back through the bot without showing your username');
 }
 
 function noteThreadStuff(message) {
@@ -429,38 +495,39 @@ function noteThreadStuff(message) {
     return;
   }
 
+  if (!isManagedAnonThread(message.channel)) {
+    return;
+  }
+
   threadLastActive[message.channel.id] = Date.now();
 }
 
 async function checkDeadThreads(client) {
-  const stuff = storage.getAllSubmissions();
+  const forumId = client.botConfig.forumChannelId;
   const now = Date.now();
 
-  for (const item of stuff) {
-    if (!item.threadId) {
+  if (!forumId) {
+    return;
+  }
+
+  const forum = await client.channels.fetch(forumId).catch(() => null);
+
+  if (!forum || forum.type !== ChannelType.GuildForum) {
+    return;
+  }
+
+  const active = await forum.threads.fetchActive().catch(() => null);
+
+  if (!active) {
+    return;
+  }
+
+  for (const thread of active.threads.values()) {
+    if (!isManagedAnonThread(thread)) {
       continue;
     }
 
-    if (item.closedAt || item.resolvedAt) {
-      continue;
-    }
-
-    const thread = await client.channels.fetch(item.threadId).catch(() => null);
-
-    if (!thread || !thread.isThread()) {
-      continue;
-    }
-
-    if (thread.archived || thread.locked) {
-      storage.updateSubmission(item.submissionId, {
-        closedAt: item.closedAt || new Date().toISOString(),
-        closedBy: item.closedBy || 'unknown',
-      });
-      delete threadLastActive[item.threadId];
-      continue;
-    }
-
-    let last = threadLastActive[item.threadId];
+    let last = threadLastActive[thread.id];
 
     if (!last && thread.lastMessageId) {
       const msg = await thread.messages.fetch(thread.lastMessageId).catch(() => null);
@@ -471,25 +538,20 @@ async function checkDeadThreads(client) {
     }
 
     if (!last) {
-      last = new Date(item.approvedAt || item.createdAt).getTime();
+      last = thread.createdTimestamp || now;
     }
 
-    threadLastActive[item.threadId] = last;
+    threadLastActive[thread.id] = last;
 
     if (now - last < DEAD_MS) {
       continue;
     }
 
-    // check dead threads and close them
+    clearInfoRequestForThread(thread.id);
     await thread.setLocked(true, 'inactive for too long').catch(() => null);
     await thread.setArchived(true, 'inactive for too long').catch(() => null);
-
-    storage.updateSubmission(item.submissionId, {
-      closedAt: new Date().toISOString(),
-      closedBy: 'auto-inactive',
-    });
-
-    delete threadLastActive[item.threadId];
+    delete threadLastActive[thread.id];
+    removeSubmissionByThreadId(thread.id);
   }
 }
 
@@ -502,88 +564,15 @@ function startDeadThreadLoop(client) {
   }, 10 * 60 * 1000);
 }
 
-function formatSubmissionLine(submission) {
-  const cleanContent = submission.content.length > 120
-    ? `${submission.content.slice(0, 117)}...`
-    : submission.content;
-  const timestampBits = [
-    `submitted: <t:${Math.floor(new Date(submission.createdAt).getTime() / 1000)}:f>`,
-  ];
-
-  if (submission.approvedAt) {
-    timestampBits.push(`approved: <t:${Math.floor(new Date(submission.approvedAt).getTime() / 1000)}:f>`);
-  }
-
-  if (submission.rejectedAt) {
-    timestampBits.push(`rejected: <t:${Math.floor(new Date(submission.rejectedAt).getTime() / 1000)}:f>`);
-  }
-
-  if (submission.closedAt) {
-    timestampBits.push(`closed: <t:${Math.floor(new Date(submission.closedAt).getTime() / 1000)}:f>`);
-  }
-
-  if (submission.resolvedAt) {
-    timestampBits.push(`resolved: <t:${Math.floor(new Date(submission.resolvedAt).getTime() / 1000)}:f>`);
-  }
-
-  return [
-    `**${submission.submissionId}**`,
-    `status: ${submission.status}`,
-    timestampBits.join(' | '),
-    cleanContent,
-  ].join('\n');
-}
-
-async function handleSearchAnonCommand(interaction) {
-  if (!canModerate(interaction)) {
-    await interaction.reply({
-      content: 'you need Manage Threads for this',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (!interaction.guildId) {
-    await interaction.reply({
-      content: 'this only works inside a server',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const anonId = interaction.options.getString('anon-id', true).trim().toLowerCase();
-  const submissions = storage.findSubmissionsByAnon(interaction.guildId, anonId);
-
-  if (!submissions.length) {
-    await interaction.reply({
-      content: `no submissions found for \`${anonId}\``,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const embed = new EmbedBuilder()
-    .setTitle(`search results for ${anonId}`)
-    .setColor(0x5865f2)
-    .setDescription(submissions.map(formatSubmissionLine).join('\n\n'))
-    .setFooter({ text: `${submissions.length} submission(s)` });
-
-  await interaction.reply({
-    embeds: [embed],
-    ephemeral: true,
-  });
-}
-
 module.exports = {
   checkDeadThreads,
   handleMoreInfoDmReply,
+  handleRejectModal,
   handleResolvedButton,
+  handleCloseButton,
   handleRequestMoreInfoButton,
   handleRequestMoreInfoModal,
-  handleCloseButton,
-  handleReplyCommand,
   handleReviewButton,
-  handleSearchAnonCommand,
   noteThreadStuff,
   startDeadThreadLoop,
 };

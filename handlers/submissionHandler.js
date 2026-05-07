@@ -8,9 +8,9 @@ const {
   TextInputStyle,
 } = require('discord.js');
 
-const { makeAnonId, makeSubmissionId } = require('../utils/idGenerator');
-const storage = require('../utils/storage');
-const waitingStuff = new Map();
+const { makeSubmissionId } = require('../utils/idGenerator');
+const confirmQueue = new Map();
+const livePosts = new Map();
 
 function buildReviewEmbed(submission) {
   return new EmbedBuilder()
@@ -19,8 +19,11 @@ function buildReviewEmbed(submission) {
     .setDescription(submission.content)
     .addFields(
       { name: 'submission id', value: submission.submissionId, inline: true },
-      { name: 'anon id', value: submission.anonId, inline: true },
       { name: 'status', value: submission.status, inline: true },
+      {
+        name: 'how anonymous is this',
+        value: 'mods and the public do not see the sender from this post. the bot can still DM the sender for follow-up.',
+      },
     )
     .setTimestamp(new Date(submission.createdAt));
 }
@@ -40,36 +43,80 @@ function buildReviewButtons(submissionId, disabled = false) {
   );
 }
 
-function getOrCreateUserAnonId(guildId, userId) {
-  const currentAnonId = storage.getUserAnonId(guildId, userId);
+function getLiveSubmission(submissionId) {
+  return livePosts.get(submissionId) || null;
+}
 
-  if (currentAnonId) {
-    return currentAnonId;
+function getSubmissionByThreadId(threadId) {
+  for (const item of livePosts.values()) {
+    if (item.threadId === threadId) {
+      return item;
+    }
   }
 
-  let anonId = null;
+  return null;
+}
 
-  // quick lookup nothing fancy
-  do {
-    anonId = makeAnonId();
-  } while (storage.anonIdExistsInGuild(guildId, anonId));
+function patchLiveSubmission(submissionId, bits) {
+  const item = livePosts.get(submissionId);
 
-  storage.saveUserAnonId(guildId, userId, anonId);
-  return anonId;
+  if (!item) {
+    return null;
+  }
+
+  Object.assign(item, bits);
+  return item;
+}
+
+function removeLiveSubmission(submissionId) {
+  livePosts.delete(submissionId);
+}
+
+function removeSubmissionByThreadId(threadId) {
+  const item = getSubmissionByThreadId(threadId);
+
+  if (!item) {
+    return null;
+  }
+
+  livePosts.delete(item.submissionId);
+  return item;
+}
+
+function formatChannelList(ids) {
+  return ids.map((id) => `<#${id}>`).join(', ');
 }
 
 async function openSubmitModal(interaction) {
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content: 'this only works inside a server',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const allowedChannels = interaction.client.botConfig.submitChannelIds || [];
+
+  if (allowedChannels.length && !allowedChannels.includes(interaction.channelId)) {
+    await interaction.reply({
+      content: `you can only use \`/submit\` in ${formatChannelList(allowedChannels)}`,
+      ephemeral: true,
+    });
+    return;
+  }
+
   const modal = new ModalBuilder()
     .setCustomId('submit-modal')
-    .setTitle('anonymous submission');
+    .setTitle('anonymous vent');
 
   const messageInput = new TextInputBuilder()
     .setCustomId('submission-content')
-    .setLabel('what do you want to post')
+    .setLabel('what do you want to send')
     .setStyle(TextInputStyle.Paragraph)
     .setMaxLength(1500)
     .setRequired(true)
-    .setPlaceholder('write whatever you need to say');
+    .setPlaceholder('write your vent here');
 
   const row = new ActionRowBuilder().addComponents(messageInput);
   modal.addComponents(row);
@@ -99,7 +146,6 @@ async function handleSubmitModal(interaction) {
   const data = {
     submissionId: makeSubmissionId(),
     guildId: interaction.guildId,
-    anonId: getOrCreateUserAnonId(interaction.guildId, interaction.user.id),
     userId: interaction.user.id,
     content: interaction.fields.getTextInputValue('submission-content').trim(),
     createdAt: new Date().toISOString(),
@@ -126,7 +172,16 @@ async function handleSubmitModal(interaction) {
   try {
     // ask if they actually want this sent
     await interaction.user.send({
-      content: `hey just checking, send this to mods?\n\nanon id: \`${data.anonId}\`\n\n${data.content}`,
+      content: [
+        'hey, before i send this:',
+        '- moderators and the public will not see your username from the vent',
+        '- the bot still knows your account so it can DM you if mods ask for more info',
+        '- this does not hide you from discord or from whoever runs the bot',
+        '',
+        'send this to mods?',
+        '',
+        data.content,
+      ].join('\n'),
       components: [row],
     });
   } catch (error) {
@@ -138,19 +193,22 @@ async function handleSubmitModal(interaction) {
     return;
   }
 
-  waitingStuff.set(data.submissionId, data);
+  confirmQueue.set(data.submissionId, {
+    ...data,
+    dmUserId: interaction.user.id,
+  });
 
   await interaction.reply({
-    content: 'check your dms first',
+    content: 'check your dms first. that message also explains exactly what stays anonymous and what does not.',
     ephemeral: true,
   });
 }
 
 async function handleSubmitConfirmButton(interaction) {
   const [, action, submissionId] = interaction.customId.split(':');
-  const data = waitingStuff.get(submissionId);
+  const data = confirmQueue.get(submissionId);
 
-  if (!data || data.userId !== interaction.user.id) {
+  if (!data || data.dmUserId !== interaction.user.id) {
     await interaction.reply({
       content: 'that submit prompt is dead now',
       ephemeral: true,
@@ -158,7 +216,7 @@ async function handleSubmitConfirmButton(interaction) {
     return;
   }
 
-  waitingStuff.delete(submissionId);
+  confirmQueue.delete(submissionId);
 
   if (action === 'cancel') {
     await interaction.update({
@@ -168,9 +226,9 @@ async function handleSubmitConfirmButton(interaction) {
     return;
   }
 
-  const msg = await interaction.client.channels.fetch(interaction.client.botConfig.modQueueChannelId);
+  const queue = await interaction.client.channels.fetch(interaction.client.botConfig.modQueueChannelId);
 
-  if (!msg || !msg.isTextBased()) {
+  if (!queue || !queue.isTextBased()) {
     await interaction.update({
       content: 'could not reach the mod queue so i gave up',
       components: [],
@@ -178,19 +236,19 @@ async function handleSubmitConfirmButton(interaction) {
     return;
   }
 
-  const reviewMessage = await msg.send({
+  const reviewMessage = await queue.send({
     embeds: [buildReviewEmbed(data)],
     components: [buildReviewButtons(data.submissionId)],
   });
 
-  storage.addSubmission({
+  livePosts.set(data.submissionId, {
     ...data,
     reviewChannelId: reviewMessage.channelId,
     reviewMessageId: reviewMessage.id,
   });
 
   await interaction.update({
-    content: `sent to mods\nanon id: \`${data.anonId}\``,
+    content: 'sent to mods',
     components: [],
   });
 }
@@ -198,8 +256,12 @@ async function handleSubmitConfirmButton(interaction) {
 module.exports = {
   buildReviewButtons,
   buildReviewEmbed,
-  getOrCreateUserAnonId,
+  getLiveSubmission,
+  getSubmissionByThreadId,
   handleSubmitConfirmButton,
   handleSubmitModal,
   openSubmitModal,
+  patchLiveSubmission,
+  removeLiveSubmission,
+  removeSubmissionByThreadId,
 };

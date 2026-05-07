@@ -9,6 +9,13 @@ const {
   Partials,
 } = require('discord.js');
 
+function splitIds(raw) {
+  return (raw || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -22,8 +29,9 @@ const client = new Client({
 client.commands = new Collection();
 client.botConfig = {
   guildId: process.env.GUILD_ID,
-  modQueueChannelId: process.env.MOD_QUEUE_CHANNEL_ID,
-  forumChannelId: process.env.FORUM_CHANNEL_ID,
+  submitChannelIds: splitIds(process.env.VENT_COMMAND_CHANNEL_IDS || process.env.SUBMIT_CHANNEL_IDS),
+  modQueueChannelId: process.env.VENT_REVIEW_CHANNEL_ID || process.env.MOD_QUEUE_CHANNEL_ID,
+  forumChannelId: process.env.VENT_FORUM_CHANNEL_ID || process.env.FORUM_CHANNEL_ID,
 };
 
 const commandsPath = path.join(__dirname, 'commands');

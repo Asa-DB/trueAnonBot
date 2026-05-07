@@ -1,10 +1,11 @@
 const { handleSubmitModal, handleSubmitConfirmButton } = require('../handlers/submissionHandler');
 const {
-  handleReviewButton,
   handleCloseButton,
-  handleResolvedButton,
+  handleRejectModal,
   handleRequestMoreInfoButton,
   handleRequestMoreInfoModal,
+  handleResolvedButton,
+  handleReviewButton,
 } = require('../handlers/threadHandler');
 
 module.exports = {
@@ -29,8 +30,14 @@ module.exports = {
           return;
         }
 
+        if (interaction.customId.startsWith('submission:reject:modal:')) {
+          await handleRejectModal(interaction);
+          return;
+        }
+
         if (interaction.customId.startsWith('thread:moreinfo:modal:')) {
           await handleRequestMoreInfoModal(interaction);
+          return;
         }
 
         return;
@@ -59,6 +66,7 @@ module.exports = {
 
         if (interaction.customId === 'thread:moreinfo') {
           await handleRequestMoreInfoButton(interaction);
+          return;
         }
       }
     } catch (error) {

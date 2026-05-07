@@ -5,8 +5,8 @@ module.exports = {
 
   async execute(message) {
     try {
-      noteThreadStuff(message);
       await handleMoreInfoDmReply(message);
+      noteThreadStuff(message);
     } catch (error) {
       console.error('message handler failed');
       console.error(error);
