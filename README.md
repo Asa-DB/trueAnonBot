@@ -28,7 +28,7 @@ VENT_COMMAND_CHANNEL_IDS=channel_id_one,channel_id_two
 VENT_REVIEW_CHANNEL_ID=private_mod_channel_id
 VENT_FORUM_CHANNEL_ID=forum_channel_id
 MODROLE=moderator_role_id
-STICKY_CHANNEL_ID=channel_id_for_sticky_message
+STICKY_CHANNEL_IDS=channel_id_for_sticky_message,another_channel_id
 STICKY_MESSAGE="be respectful.
 no doxxing.
 mods review vents before posting."
@@ -39,7 +39,7 @@ STICKY_INTERVAL_MINUTES=10
 - `VENT_REVIEW_CHANNEL_ID`: private mod channel where approve/reject messages go
 - `VENT_FORUM_CHANNEL_ID`: forum channel where approved vents get posted
 - `MODROLE`: optional role id that gates approve, reject, request-more-info, resolve, and close actions
-- `STICKY_CHANNEL_ID`: channel where the bot keeps reposting the sticky
+- `STICKY_CHANNEL_IDS`: comma-separated channel ids where the bot keeps reposting the sticky
 - `STICKY_MESSAGE`: sticky text; you can write it as a quoted multiline value, and `\n` still works too
 - `STICKY_INTERVAL_MINUTES`: how often the bot deletes the old sticky and posts a new one
 

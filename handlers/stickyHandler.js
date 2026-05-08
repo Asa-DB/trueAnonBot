@@ -1,11 +1,12 @@
-let lastStickyMessageId = null;
+const stickyMsgIds = new Map();
+const stickyTimes = new Map();
+const chatTimes = new Map();
 
 function findExistingSticky(recent, client) {
   return recent?.find((msg) => msg.author.id === client.user.id);
 }
 
-async function postSticky(client) {
-  const stickyChannelId = client.botConfig.stickyChannelId;
+async function postSticky(client, stickyChannelId) {
   const stickyText = client.botConfig.stickyMessage;
 
   if (!stickyChannelId || !stickyText) {
@@ -18,7 +19,9 @@ async function postSticky(client) {
     return;
   }
 
-  if (!lastStickyMessageId) {
+  const oldStickyId = stickyMsgIds.get(stickyChannelId) || null;
+
+  if (!oldStickyId) {
     const recent = await channel.messages.fetch({ limit: 10 }).catch(() => null);
     const oldSticky = findExistingSticky(recent, client);
 
@@ -27,8 +30,8 @@ async function postSticky(client) {
     }
   }
 
-  if (lastStickyMessageId) {
-    const oldMsg = await channel.messages.fetch(lastStickyMessageId).catch(() => null);
+  if (oldStickyId) {
+    const oldMsg = await channel.messages.fetch(oldStickyId).catch(() => null);
 
     if (oldMsg) {
       await oldMsg.delete().catch(() => null);
@@ -38,31 +41,50 @@ async function postSticky(client) {
   const freshMsg = await channel.send(stickyText).catch(() => null);
 
   if (freshMsg) {
-    lastStickyMessageId = freshMsg.id;
+    stickyMsgIds.set(stickyChannelId, freshMsg.id);
+    stickyTimes.set(stickyChannelId, Date.now());
   }
+}
+
+function noteStickyActivity(message) {
+  if (message.author?.bot || message.guildId == null) {
+    return;
+  }
+
+  if (!message.client.botConfig.stickyChannelIds?.includes(message.channelId)) {
+    return;
+  }
+
+  chatTimes.set(message.channelId, Date.now());
 }
 
 function startStickyLoop(client) {
   const everyMs = client.botConfig.stickyIntervalMs;
+  const stickyIds = client.botConfig.stickyChannelIds || [];
 
-  if (!client.botConfig.stickyChannelId || !client.botConfig.stickyMessage || !everyMs) {
+  if (!stickyIds.length || !client.botConfig.stickyMessage || !everyMs) {
     return;
   }
 
-  postSticky(client).catch((error) => {
-    console.error('sticky post failed');
-    console.error(error);
-  });
-
   setInterval(() => {
-    postSticky(client).catch((error) => {
-      console.error('sticky post failed');
-      console.error(error);
-    });
+    for (const channelId of stickyIds) {
+      const lastChatAt = chatTimes.get(channelId) || 0;
+      const lastStickyAt = stickyTimes.get(channelId) || 0;
+
+      if (!lastChatAt || lastChatAt <= lastStickyAt) {
+        continue;
+      }
+
+      postSticky(client, channelId).catch((error) => {
+        console.error('sticky post failed');
+        console.error(error);
+      });
+    }
   }, everyMs);
 }
 
 module.exports = {
+  noteStickyActivity,
   postSticky,
   startStickyLoop,
 };

@@ -1,3 +1,4 @@
+const { noteStickyActivity } = require('../handlers/stickyHandler');
 const { handleDirectMessage, noteThreadStuff } = require('../handlers/threadHandler');
 
 module.exports = {
@@ -7,6 +8,7 @@ module.exports = {
     try {
       await handleDirectMessage(message);
       noteThreadStuff(message);
+      noteStickyActivity(message);
     } catch (error) {
       console.error('message handler failed');
       console.error(error);
