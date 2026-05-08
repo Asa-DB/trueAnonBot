@@ -26,6 +26,12 @@ function readStickyMinutes(raw) {
   return num;
 }
 
+function readMessage(raw) {
+  return (raw || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\\n/g, '\n');
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -43,8 +49,9 @@ client.botConfig = {
   modQueueChannelId: process.env.VENT_REVIEW_CHANNEL_ID || process.env.MOD_QUEUE_CHANNEL_ID,
   forumChannelId: process.env.VENT_FORUM_CHANNEL_ID || process.env.FORUM_CHANNEL_ID,
   stickyChannelId: process.env.STICKY_CHANNEL_ID || '',
-  stickyMessage: (process.env.STICKY_MESSAGE || '').replace(/\\n/g, '\n'),
+  stickyMessage: readMessage(process.env.STICKY_MESSAGE),
   stickyIntervalMs: readStickyMinutes(process.env.STICKY_INTERVAL_MINUTES) * 60 * 1000,
+  modRoleId: process.env.MODROLE || '',
 };
 
 const commandsPath = path.join(__dirname, 'commands');

@@ -27,27 +27,32 @@ GUILD_ID=your_server_id
 VENT_COMMAND_CHANNEL_IDS=channel_id_one,channel_id_two
 VENT_REVIEW_CHANNEL_ID=private_mod_channel_id
 VENT_FORUM_CHANNEL_ID=forum_channel_id
+MODROLE=moderator_role_id
 STICKY_CHANNEL_ID=channel_id_for_sticky_message
-STICKY_MESSAGE=be respectful.\nno doxxing.\nmods review vents before posting.
+STICKY_MESSAGE="be respectful.
+no doxxing.
+mods review vents before posting."
 STICKY_INTERVAL_MINUTES=10
 ```
 
 - `VENT_COMMAND_CHANNEL_IDS`: comma-separated channel ids where `/submit` is allowed
 - `VENT_REVIEW_CHANNEL_ID`: private mod channel where approve/reject messages go
 - `VENT_FORUM_CHANNEL_ID`: forum channel where approved vents get posted
+- `MODROLE`: optional role id that gates approve, reject, request-more-info, resolve, and close actions
 - `STICKY_CHANNEL_ID`: channel where the bot keeps reposting the sticky
-- `STICKY_MESSAGE`: sticky text, use `\n` for line breaks
+- `STICKY_MESSAGE`: sticky text; you can write it as a quoted multiline value, and `\n` still works too
 - `STICKY_INTERVAL_MINUTES`: how often the bot deletes the old sticky and posts a new one
 
 ## what it does
 
 - `/submit` opens a modal for an anonymous vent
-- `/reply` explains how to send an anonymous follow-up now
+- `/submit` can also be used in bot DMs
+- `/reply` explains how anonymous follow-ups work
 - the bot asks for DM confirmation before it sends anything
 - the mod review message has approve and reject buttons
 - rejection can include an optional typed-out moderator reason that gets DMd back
 - approval creates a forum post and keeps the sender hidden from the public thread
-- after approval, the original poster can DM the bot to add anonymous follow-ups without moderator approval
+- after approval, the original poster gets a DM control message for anonymous follow-ups
 - moderators can request more information and the bot relays the answer back in DMs
 - mods can close or resolve a thread with buttons
 - dead threads get auto-locked after 8 hours with no new messages
@@ -80,4 +85,6 @@ the bot should be able to:
 - manage threads
 - read the mod queue channel
 
-mods using the review buttons should have `Manage Threads`
+if `MODROLE` is set, only that role can use the sensitive mod controls
+
+if `MODROLE` is not set, those controls fall back to `Manage Threads`

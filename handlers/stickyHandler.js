@@ -1,5 +1,9 @@
 let lastStickyMessageId = null;
 
+function findExistingSticky(recent, client) {
+  return recent?.find((msg) => msg.author.id === client.user.id);
+}
+
 async function postSticky(client) {
   const stickyChannelId = client.botConfig.stickyChannelId;
   const stickyText = client.botConfig.stickyMessage;
@@ -16,7 +20,7 @@ async function postSticky(client) {
 
   if (!lastStickyMessageId) {
     const recent = await channel.messages.fetch({ limit: 10 }).catch(() => null);
-    const oldSticky = recent?.find((msg) => msg.author.id === client.user.id && msg.content === stickyText);
+    const oldSticky = findExistingSticky(recent, client);
 
     if (oldSticky) {
       await oldSticky.delete().catch(() => null);

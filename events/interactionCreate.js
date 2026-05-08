@@ -6,6 +6,8 @@ const {
   handleRequestMoreInfoModal,
   handleResolvedButton,
   handleReviewButton,
+  handleVentReplyButton,
+  handleVentReplyModal,
 } = require('../handlers/threadHandler');
 
 module.exports = {
@@ -44,6 +46,11 @@ module.exports = {
           return;
         }
 
+        if (interaction.customId.startsWith('vent:reply:modal:')) {
+          await handleVentReplyModal(interaction);
+          return;
+        }
+
         return;
       }
 
@@ -70,6 +77,11 @@ module.exports = {
 
         if (interaction.customId === 'thread:moreinfo') {
           await handleRequestMoreInfoButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith('vent:reply:')) {
+          await handleVentReplyButton(interaction);
           return;
         }
       }

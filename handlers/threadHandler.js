@@ -13,8 +13,8 @@ const {
 const {
   buildReviewButtons,
   buildReviewEmbed,
-  getApprovedSubmissionsByUserId,
   getLiveSubmission,
+  isApprovedSubmissionOwner,
   getSubmissionByThreadId,
   patchLiveSubmission,
   removeLiveSubmission,
@@ -40,8 +40,36 @@ function saveInfoRequests() {
   runtimeStore.saveInfoRequestState(infoRequests);
 }
 
+function hasModRole(interaction, modRoleId) {
+  const roles = interaction.member?.roles;
+
+  if (!roles || !modRoleId) {
+    return false;
+  }
+
+  if (Array.isArray(roles)) {
+    return roles.includes(modRoleId);
+  }
+
+  return roles.cache?.has(modRoleId) || false;
+}
+
 function canModerate(interaction) {
-  return interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads);
+  const modRoleId = interaction.client.botConfig.modRoleId;
+
+  if (modRoleId) {
+    return hasModRole(interaction, modRoleId);
+  }
+
+  return interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads) || false;
+}
+
+function getModDeniedMessage(interaction) {
+  if (interaction.client.botConfig.modRoleId) {
+    return 'you need the configured mod role for this';
+  }
+
+  return 'you need Manage Threads for this';
 }
 
 async function updateReviewMessage(interaction, submission, extraText) {
@@ -145,18 +173,25 @@ async function approveSubmission(interaction, submission) {
   const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
 
   if (sender) {
-    await sender.send([
-      'your vent was approved and posted.',
-      'the post is still mostly anonymous to the public and moderators in normal server use.',
-      `submission id: ${submission.submissionId}`,
-      '',
-      'to add an anonymous follow-up, DM me your message.',
-      'if you ever have more than one open vent, start the DM with the submission id like this:',
-      `${submission.submissionId}: your follow-up here`,
-      '',
-      'if a moderator needs more information, the bot may DM you and relay your reply without showing your username in the thread.',
-      'discord itself and whoever runs the bot are still technical limits here, because that is how discord bots fundamentally work.',
-    ].join('\n')).catch(() => null);
+    const controlRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`vent:reply:${submission.submissionId}`)
+        .setLabel('Send Follow-Up')
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    await sender.send({
+      content: [
+        'your vent was approved and posted.',
+        'the post is still mostly anonymous to the public and moderators in normal server use.',
+        '',
+        'use the button below any time you want to send an anonymous follow-up to this thread.',
+        '',
+        'if a moderator needs more information, the bot may DM you and relay your reply without showing your username in the thread.',
+        'discord itself and whoever runs the bot are still technical limits here, because that is how discord bots fundamentally work.',
+      ].join('\n'),
+      components: [controlRow],
+    }).catch(() => null);
   }
 }
 
@@ -203,7 +238,7 @@ async function rejectSubmission(interaction, submission, reasonText) {
 async function handleReviewButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'you need Manage Threads for this',
+      content: getModDeniedMessage(interaction),
       ephemeral: true,
     });
     return;
@@ -254,7 +289,7 @@ async function handleReviewButton(interaction) {
 async function handleRejectModal(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'you need Manage Threads for this',
+      content: getModDeniedMessage(interaction),
       ephemeral: true,
     });
     return;
@@ -286,7 +321,7 @@ async function handleRejectModal(interaction) {
 async function handleCloseButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'you need Manage Threads for this',
+      content: getModDeniedMessage(interaction),
       ephemeral: true,
     });
     return;
@@ -325,7 +360,7 @@ async function handleCloseButton(interaction) {
 async function handleResolvedButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'you need Manage Threads for this',
+      content: getModDeniedMessage(interaction),
       ephemeral: true,
     });
     return;
@@ -381,7 +416,7 @@ function clearInfoRequestForThread(threadId) {
 async function handleRequestMoreInfoButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'you need Manage Threads for this',
+      content: getModDeniedMessage(interaction),
       ephemeral: true,
     });
     return;
@@ -424,7 +459,7 @@ async function handleRequestMoreInfoButton(interaction) {
 async function handleRequestMoreInfoModal(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: 'you need Manage Threads for this',
+      content: getModDeniedMessage(interaction),
       ephemeral: true,
     });
     return;
@@ -517,68 +552,6 @@ function pullMessageBody(message) {
   return bits.join('\n').trim();
 }
 
-function parseDmFollowup(rawText) {
-  const text = rawText.trim();
-
-  if (!text) {
-    return null;
-  }
-
-  const withId = text.match(/^#?([a-z0-9]{6,16})\s*[:\-]\s*([\s\S]+)/i);
-
-  if (!withId) {
-    return {
-      submissionId: null,
-      body: text,
-    };
-  }
-
-  return {
-    submissionId: withId[1].toUpperCase(),
-    body: withId[2].trim(),
-  };
-}
-
-function formatSubmissionChoices(items) {
-  return items.map((item) => `- ${item.submissionId}`).join('\n');
-}
-
-function pickFollowupTarget(userId, rawText) {
-  const parsed = parseDmFollowup(rawText);
-
-  if (!parsed || !parsed.body) {
-    return { error: 'empty' };
-  }
-
-  const openOnes = getApprovedSubmissionsByUserId(userId);
-
-  if (!openOnes.length) {
-    return { error: 'none' };
-  }
-
-  if (parsed.submissionId) {
-    const match = openOnes.find((item) => item.submissionId === parsed.submissionId);
-
-    if (!match) {
-      return { error: 'bad-id', choices: openOnes };
-    }
-
-    return {
-      target: match,
-      body: parsed.body,
-    };
-  }
-
-  if (openOnes.length > 1) {
-    return { error: 'need-id', choices: openOnes };
-  }
-
-  return {
-    target: openOnes[0],
-    body: parsed.body,
-  };
-}
-
 async function relayMoreInfoReply(message, pending) {
   const text = pullMessageBody(message);
 
@@ -616,66 +589,117 @@ async function relayMoreInfoReply(message, pending) {
 }
 
 async function postAnonFollowup(message) {
-  const body = pullMessageBody(message);
-  const picked = pickFollowupTarget(message.author.id, body);
+  await message.channel.send([
+    'follow-ups now go through the control message i DM when a vent is approved.',
+    'use the `Send Follow-Up` button on that DM so i know which thread to post to.',
+  ].join('\n'));
+}
 
-  if (picked.error === 'empty') {
-    await message.channel.send('send text, an attachment, or both and i will post it as an anonymous follow-up');
+async function postAnonFollowupForSubmission(interaction, submissionId, body) {
+  const submission = getLiveSubmission(submissionId);
+
+  if (!submission || submission.status !== 'approved' || !submission.threadId) {
+    await interaction.reply({
+      content: 'that vent is not open for follow-ups anymore',
+      ephemeral: true,
+    });
     return;
   }
 
-  if (picked.error === 'none') {
-    await message.channel.send([
-      'i could not find an open approved vent thread for you.',
-      'if a mod approved your vent before the bot restarted, ask them to approve again or open a new vent.',
-    ].join('\n'));
+  if (submission.userId !== interaction.user.id) {
+    await interaction.reply({
+      content: 'that control message is not for you',
+      ephemeral: true,
+    });
     return;
   }
 
-  if (picked.error === 'need-id') {
-    await message.channel.send([
-      'you have more than one open vent thread.',
-      'start your message with the submission id like `ABC123: your follow-up`.',
-      '',
-      'open submission ids:',
-      formatSubmissionChoices(picked.choices),
-    ].join('\n'));
+  if (!body) {
+    await interaction.reply({
+      content: 'type a follow-up first',
+      ephemeral: true,
+    });
     return;
   }
 
-  if (picked.error === 'bad-id') {
-    await message.channel.send([
-      'i could not match that submission id to one of your open vents.',
-      'use one of these:',
-      formatSubmissionChoices(picked.choices),
-    ].join('\n'));
+  if (body.length > FOLLOW_UP_LIMIT) {
+    await interaction.reply({
+      content: `keep follow-ups under ${FOLLOW_UP_LIMIT} characters`,
+      ephemeral: true,
+    });
     return;
   }
 
-  if (picked.body.length > FOLLOW_UP_LIMIT) {
-    await message.channel.send(`keep follow-ups under ${FOLLOW_UP_LIMIT} characters`);
-    return;
-  }
-
-  const thread = await message.client.channels.fetch(picked.target.threadId).catch(() => null);
+  const thread = await interaction.client.channels.fetch(submission.threadId).catch(() => null);
 
   if (!thread || !thread.isThread() || thread.archived || thread.locked) {
-    await message.channel.send('that vent thread is closed, so i did not post the follow-up');
-    removeSubmissionByThreadId(picked.target.threadId);
+    removeSubmissionByThreadId(submission.threadId);
+    await interaction.reply({
+      content: 'that vent thread is closed, so i did not post the follow-up',
+      ephemeral: true,
+    });
     return;
   }
 
   const sent = await thread.send({
-    content: `**anonymous follow-up**\n${picked.body}`,
+    content: `**anonymous follow-up**\n${body}`,
   }).then(() => true).catch(() => false);
 
   if (!sent) {
-    await message.channel.send('something broke while posting that follow-up');
+    await interaction.reply({
+      content: 'something broke while posting that follow-up',
+      ephemeral: true,
+    });
     return;
   }
 
   threadLastActive[thread.id] = Date.now();
-  await message.channel.send(`posted your anonymous follow-up to ${picked.target.submissionId}`);
+  await interaction.reply({
+    content: 'posted your anonymous follow-up',
+    ephemeral: true,
+  });
+}
+
+async function handleVentReplyButton(interaction) {
+  const submissionId = interaction.customId.split(':')[2];
+
+  if (!isApprovedSubmissionOwner(submissionId, interaction.user.id)) {
+    await interaction.reply({
+      content: 'that control message is not active for you anymore',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`vent:reply:modal:${submissionId}`)
+    .setTitle('anonymous follow-up');
+
+  const input = new TextInputBuilder()
+    .setCustomId('followup-body')
+    .setLabel('what do you want to add')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(FOLLOW_UP_LIMIT)
+    .setPlaceholder('write your follow-up here');
+
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  await interaction.showModal(modal);
+}
+
+async function handleVentReplyModal(interaction) {
+  const submissionId = interaction.customId.split(':')[3];
+
+  if (!isApprovedSubmissionOwner(submissionId, interaction.user.id)) {
+    await interaction.reply({
+      content: 'that control message is not active for you anymore',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const body = interaction.fields.getTextInputValue('followup-body').trim();
+  await postAnonFollowupForSubmission(interaction, submissionId, body);
 }
 
 async function handleDirectMessage(message) {
@@ -771,6 +795,8 @@ module.exports = {
   checkDeadThreads,
   handleDirectMessage,
   handleRejectModal,
+  handleVentReplyButton,
+  handleVentReplyModal,
   handleResolvedButton,
   handleCloseButton,
   handleRequestMoreInfoButton,

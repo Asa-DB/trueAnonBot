@@ -7,7 +7,6 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
-
 const { makeSubmissionId } = require('../utils/idGenerator');
 const runtimeStore = require('../utils/runtimeStore');
 
@@ -82,6 +81,16 @@ function getApprovedSubmissionsByUserId(userId) {
   return hits;
 }
 
+function isApprovedSubmissionOwner(submissionId, userId) {
+  const item = livePosts.get(submissionId);
+
+  if (!item) {
+    return false;
+  }
+
+  return item.status === 'approved' && item.userId === userId && Boolean(item.threadId);
+}
+
 function patchLiveSubmission(submissionId, bits) {
   const item = livePosts.get(submissionId);
 
@@ -138,17 +147,9 @@ function formatChannelList(ids) {
 }
 
 async function openSubmitModal(interaction) {
-  if (!interaction.guildId) {
-    await interaction.reply({
-      content: 'this only works inside a server',
-      ephemeral: true,
-    });
-    return;
-  }
-
   const allowedChannels = interaction.client.botConfig.submitChannelIds || [];
 
-  if (allowedChannels.length && !allowedChannels.includes(interaction.channelId)) {
+  if (interaction.guildId && allowedChannels.length && !allowedChannels.includes(interaction.channelId)) {
     await interaction.reply({
       content: `you can only use \`/submit\` in ${formatChannelList(allowedChannels)}`,
       ephemeral: true,
@@ -176,6 +177,7 @@ async function openSubmitModal(interaction) {
 
 async function handleSubmitModal(interaction) {
   const modQueueChannelId = interaction.client.botConfig.modQueueChannelId;
+  const targetGuildId = interaction.guildId || interaction.client.botConfig.guildId;
 
   if (!modQueueChannelId) {
     await interaction.reply({
@@ -185,9 +187,9 @@ async function handleSubmitModal(interaction) {
     return;
   }
 
-  if (!interaction.guildId) {
+  if (!targetGuildId) {
     await interaction.reply({
-      content: 'this only works inside a server',
+      content: 'target guild is not configured',
       ephemeral: true,
     });
     return;
@@ -195,7 +197,7 @@ async function handleSubmitModal(interaction) {
 
   const data = {
     submissionId: makeSubmissionId(),
-    guildId: interaction.guildId,
+    guildId: targetGuildId,
     userId: interaction.user.id,
     content: interaction.fields.getTextInputValue('submission-content').trim(),
     createdAt: new Date().toISOString(),
@@ -226,7 +228,7 @@ async function handleSubmitModal(interaction) {
         'hey, before i send this:',
         '- your username stays hidden from the vent and from the normal mod review flow',
         '- if mods need more information later, i can DM you and relay your reply without putting your username in the thread',
-        '- if your vent gets approved, you can DM me follow-ups and i will post them anonymously',
+        '- if your vent gets approved, i will DM you a control message you can use for anonymous follow-ups',
         '',
         'send this to mods?',
         '',
@@ -307,6 +309,7 @@ module.exports = {
   buildReviewButtons,
   buildReviewEmbed,
   getApprovedSubmissionsByUserId,
+  isApprovedSubmissionOwner,
   getLiveSubmission,
   getSubmissionByThreadId,
   handleSubmitConfirmButton,
