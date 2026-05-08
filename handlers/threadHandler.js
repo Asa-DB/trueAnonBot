@@ -20,6 +20,12 @@ const {
   removeLiveSubmission,
   removeSubmissionByThreadId,
 } = require('./submissionHandler');
+const {
+  errEmbed,
+  infoBox,
+  okEmbed,
+  warnBox,
+} = require('../utils/responseEmbeds');
 const runtimeStore = require('../utils/runtimeStore');
 const threadLastActive = {};
 const savedState = runtimeStore.readState();
@@ -66,10 +72,10 @@ function canModerate(interaction) {
 
 function getModDeniedMessage(interaction) {
   if (interaction.client.botConfig.modRoleId) {
-    return 'you need the configured mod role for this';
+    return 'You need the configured mod role for that.';
   }
 
-  return 'you need Manage Threads for this';
+  return 'You need `Manage Threads` for that.';
 }
 
 async function updateReviewMessage(interaction, submission, extraText) {
@@ -100,7 +106,7 @@ async function approveSubmission(interaction, submission) {
 
   if (!forumChannelId) {
     await interaction.reply({
-      content: 'forum channel is not configured',
+      embeds: [errEmbed('Setup Problem', 'The forum channel is not configured.')],
       ephemeral: true,
     });
     return;
@@ -110,7 +116,7 @@ async function approveSubmission(interaction, submission) {
 
   if (!forumChannel || forumChannel.type !== ChannelType.GuildForum) {
     await interaction.reply({
-      content: 'forum channel is missing or not a forum',
+      embeds: [errEmbed('Setup Problem', 'The forum channel is missing or is not a forum channel.')],
       ephemeral: true,
     });
     return;
@@ -140,13 +146,21 @@ async function approveSubmission(interaction, submission) {
       .setStyle(ButtonStyle.Secondary),
   );
 
-  // just drop a message so people behave lol
   await thread.send({
-    content: 'This vent is mostly anonymous in normal server use. The public and the thread do not show who sent it. Discord and the bot still have technical limits, and moderators can ask follow-up questions through the bot without exposing the sender in the thread.',
+    embeds: [infoBox('Thread Notice', [
+      'This vent is mostly anonymous in normal server use.',
+      'The public thread does not show who sent it.',
+      'Moderators can ask follow-up questions through the bot without exposing the sender in the thread.',
+      '',
+      'Discord and the bot host are still technical limits, so do not get any strange ideas.',
+    ])],
   });
 
   await thread.send({
-    content: 'mods can use `Resolved` when the issue is handled, or `Close Thread` when they just need to shut the thread down.',
+    embeds: [infoBox('Thread Controls', [
+      'Use `Resolved` when the issue is handled.',
+      'Use `Close Thread` when the thread just needs to be shut down.',
+    ])],
     components: [closeRow],
   });
 
@@ -166,14 +180,17 @@ async function approveSubmission(interaction, submission) {
   );
 
   await interaction.reply({
-    content: `approved and posted in <#${thread.id}>`,
+    embeds: [okEmbed('Approved', [
+      `Posted in <#${thread.id}>.`,
+      'Clean work. Try not to look so smug about it.',
+    ])],
     ephemeral: true,
   });
 
   const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
 
   if (sender) {
-    const controlRow = new ActionRowBuilder().addComponents(
+    const replyRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`vent:reply:${submission.submissionId}`)
         .setLabel('Send Follow-Up')
@@ -181,16 +198,18 @@ async function approveSubmission(interaction, submission) {
     );
 
     await sender.send({
-      content: [
-        'your vent was approved and posted.',
-        'the post is still mostly anonymous to the public and moderators in normal server use.',
+      embeds: [okEmbed('Your Vent Is Live', [
+        'Your vent was approved and posted.',
+        'It stays mostly anonymous to the public and moderators in normal server use.',
         '',
-        'use the button below any time you want to send an anonymous follow-up to this thread.',
+        'Use the button below any time you want to send an anonymous follow-up to this thread.',
         '',
-        'if a moderator needs more information, the bot may DM you and relay your reply without showing your username in the thread.',
-        'discord itself and whoever runs the bot are still technical limits here, because that is how discord bots fundamentally work.',
-      ].join('\n'),
-      components: [controlRow],
+        'If a moderator needs more information, the bot may DM you and relay your reply without showing your username in the thread.',
+        'Discord and the bot host are still technical limits.',
+        '',
+        'I-it is not like I made this control button just for you or anything.',
+      ])],
+      components: [replyRow],
     }).catch(() => null);
   }
 }
@@ -214,23 +233,28 @@ async function rejectSubmission(interaction, submission, reasonText) {
   );
 
   const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
-  let dmWorked = false;
+  let didDmWork = false;
 
   if (sender) {
-    dmWorked = await sender.send([
-      'your vent was rejected by a moderator.',
-      cleanReason ? `reason:\n${cleanReason}` : 'no reason was included.',
-      '',
-      'the moderator still does not get your username from the vent through the bot.',
-    ].join('\n')).then(() => true).catch(() => false);
+    didDmWork = await sender.send({
+      embeds: [warnBox('Vent Rejected', [
+        'A moderator rejected your vent.',
+        cleanReason ? `**Reason:**\n${cleanReason}` : 'No reason was included.',
+        '',
+        'Your username still was not shown through the normal bot flow.',
+      ])],
+    }).then(() => true).catch(() => false);
   }
 
   removeLiveSubmission(submission.submissionId);
 
   await interaction.reply({
-    content: dmWorked
-      ? 'submission rejected'
-      : 'submission rejected. i could not DM the sender, but their identity was not exposed.',
+    embeds: [didDmWork
+      ? warnBox('Rejected', 'The submission was rejected.')
+      : warnBox('Rejected', [
+        'The submission was rejected.',
+        'I could not DM the sender, but their identity was not exposed through the normal bot flow.',
+      ])],
     ephemeral: true,
   });
 }
@@ -238,7 +262,7 @@ async function rejectSubmission(interaction, submission, reasonText) {
 async function handleReviewButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: getModDeniedMessage(interaction),
+      embeds: [warnBox('Not Allowed', getModDeniedMessage(interaction))],
       ephemeral: true,
     });
     return;
@@ -249,7 +273,10 @@ async function handleReviewButton(interaction) {
 
   if (!submission) {
     await interaction.reply({
-      content: 'that submission is gone. if the bot restarted, pending reviews do not survive it now.',
+      embeds: [warnBox('Submission Missing', [
+        'That submission is gone.',
+        'If the bot restarted, pending reviews may not have survived.',
+      ])],
       ephemeral: true,
     });
     return;
@@ -257,7 +284,7 @@ async function handleReviewButton(interaction) {
 
   if (submission.status !== 'pending') {
     await interaction.reply({
-      content: `this one is already ${submission.status}`,
+      embeds: [infoBox('Already Handled', `This one is already \`${submission.status}\`.`)],
       ephemeral: true,
     });
     return;
@@ -289,7 +316,7 @@ async function handleReviewButton(interaction) {
 async function handleRejectModal(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: getModDeniedMessage(interaction),
+      embeds: [warnBox('Not Allowed', getModDeniedMessage(interaction))],
       ephemeral: true,
     });
     return;
@@ -300,7 +327,10 @@ async function handleRejectModal(interaction) {
 
   if (!submission) {
     await interaction.reply({
-      content: 'that submission is gone. if the bot restarted, pending reviews do not survive it now.',
+      embeds: [warnBox('Submission Missing', [
+        'That submission is gone.',
+        'If the bot restarted, pending reviews may not have survived.',
+      ])],
       ephemeral: true,
     });
     return;
@@ -308,7 +338,7 @@ async function handleRejectModal(interaction) {
 
   if (submission.status !== 'pending') {
     await interaction.reply({
-      content: `this one is already ${submission.status}`,
+      embeds: [infoBox('Already Handled', `This one is already \`${submission.status}\`.`)],
       ephemeral: true,
     });
     return;
@@ -321,7 +351,7 @@ async function handleRejectModal(interaction) {
 async function handleCloseButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: getModDeniedMessage(interaction),
+      embeds: [warnBox('Not Allowed', getModDeniedMessage(interaction))],
       ephemeral: true,
     });
     return;
@@ -329,14 +359,15 @@ async function handleCloseButton(interaction) {
 
   if (!interaction.channel || !interaction.channel.isThread()) {
     await interaction.reply({
-      content: 'this button only works in a thread',
+      embeds: [warnBox('Wrong Place', 'That button only works inside a thread.')],
       ephemeral: true,
     });
     return;
   }
 
   await interaction.update({
-    content: `thread closed by <@${interaction.user.id}>`,
+    embeds: [infoBox('Thread Closed', `Closed by <@${interaction.user.id}>.`)],
+    content: '',
     components: [],
   });
 
@@ -360,7 +391,7 @@ async function handleCloseButton(interaction) {
 async function handleResolvedButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: getModDeniedMessage(interaction),
+      embeds: [warnBox('Not Allowed', getModDeniedMessage(interaction))],
       ephemeral: true,
     });
     return;
@@ -368,7 +399,7 @@ async function handleResolvedButton(interaction) {
 
   if (!interaction.channel || !interaction.channel.isThread()) {
     await interaction.reply({
-      content: 'this button only works in a thread',
+      embeds: [warnBox('Wrong Place', 'That button only works inside a thread.')],
       ephemeral: true,
     });
     return;
@@ -376,7 +407,8 @@ async function handleResolvedButton(interaction) {
 
   // mods said its done so just lock it
   await interaction.update({
-    content: `thread resolved by <@${interaction.user.id}>`,
+    embeds: [okEmbed('Thread Resolved', `Resolved by <@${interaction.user.id}>.`)],
+    content: '',
     components: [],
   });
 
@@ -416,7 +448,7 @@ function clearInfoRequestForThread(threadId) {
 async function handleRequestMoreInfoButton(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: getModDeniedMessage(interaction),
+      embeds: [warnBox('Not Allowed', getModDeniedMessage(interaction))],
       ephemeral: true,
     });
     return;
@@ -424,7 +456,7 @@ async function handleRequestMoreInfoButton(interaction) {
 
   if (!interaction.channel || !interaction.channel.isThread()) {
     await interaction.reply({
-      content: 'this button only works in a thread',
+      embeds: [warnBox('Wrong Place', 'That button only works inside a thread.')],
       ephemeral: true,
     });
     return;
@@ -434,7 +466,10 @@ async function handleRequestMoreInfoButton(interaction) {
 
   if (!submission) {
     await interaction.reply({
-      content: 'i do not have the sender link for this vent anymore. if the bot restarted, follow-up DMs stop working for older vents.',
+      embeds: [warnBox('Sender Link Missing', [
+        'I do not have the sender link for this vent anymore.',
+        'If the bot restarted, follow-up DMs may not work for older vents.',
+      ])],
       ephemeral: true,
     });
     return;
@@ -459,7 +494,7 @@ async function handleRequestMoreInfoButton(interaction) {
 async function handleRequestMoreInfoModal(interaction) {
   if (!canModerate(interaction)) {
     await interaction.reply({
-      content: getModDeniedMessage(interaction),
+      embeds: [warnBox('Not Allowed', getModDeniedMessage(interaction))],
       ephemeral: true,
     });
     return;
@@ -470,7 +505,7 @@ async function handleRequestMoreInfoModal(interaction) {
 
   if (!submission) {
     await interaction.reply({
-      content: 'i do not have the sender link for this vent anymore.',
+      embeds: [warnBox('Sender Link Missing', 'I do not have the sender link for this vent anymore.')],
       ephemeral: true,
     });
     return;
@@ -478,7 +513,7 @@ async function handleRequestMoreInfoModal(interaction) {
 
   if (infoRequests.has(submission.userId)) {
     await interaction.reply({
-      content: 'there is already a follow-up question waiting on this sender.',
+      embeds: [infoBox('Already Waiting', 'There is already a follow-up question waiting on this sender.')],
       ephemeral: true,
     });
     return;
@@ -488,7 +523,7 @@ async function handleRequestMoreInfoModal(interaction) {
 
   if (!question) {
     await interaction.reply({
-      content: 'type a question first',
+      embeds: [warnBox('Question Needed', 'Type a question first.')],
       ephemeral: true,
     });
     return;
@@ -498,26 +533,27 @@ async function handleRequestMoreInfoModal(interaction) {
 
   if (!sender) {
     await interaction.reply({
-      content: 'i could not find the sender account anymore',
+      embeds: [warnBox('Sender Missing', 'I could not find the sender account anymore.')],
       ephemeral: true,
     });
     return;
   }
 
-  const dmWorked = await sender.send([
-    'a moderator asked for more information about your anonymous vent.',
-    '',
-    'what they asked:',
-    question,
-    '',
-    'reply in this DM and i will forward your answer without showing your username.',
-    'the vent stays mostly anonymous to the public and to moderators in normal bot use.',
-    'discord itself and whoever runs the bot are still technical limits, because that is how discord bots fundamentally work.',
-  ].join('\n')).then(() => true).catch(() => false);
+  const dmOk = await sender.send({
+    embeds: [infoBox('Moderator Follow-Up', [
+      'A moderator asked for more information about your anonymous vent.',
+      '',
+      `**What they asked:**\n${question}`,
+      '',
+      'Reply in this DM and I will forward your answer without showing your username.',
+      'The vent stays mostly anonymous to the public and to moderators in normal bot use.',
+      'Discord and the bot host are still technical limits.',
+    ])],
+  }).then(() => true).catch(() => false);
 
-  if (!dmWorked) {
+  if (!dmOk) {
     await interaction.reply({
-      content: 'i could not DM the sender',
+      embeds: [warnBox('DM Failed', 'I could not DM the sender.')],
       ephemeral: true,
     });
     return;
@@ -532,7 +568,10 @@ async function handleRequestMoreInfoModal(interaction) {
   saveInfoRequests();
 
   await interaction.reply({
-    content: 'question sent in DM. their username is not shown in the thread or in the relay.',
+    embeds: [okEmbed('Question Sent', [
+      'The question was sent in DM.',
+      'Their username is not shown in the thread or in the relay.',
+    ])],
     ephemeral: true,
   });
 }
@@ -556,43 +595,58 @@ async function relayMoreInfoReply(message, pending) {
   const text = pullMessageBody(message);
 
   if (!text) {
-    await message.channel.send('send text, an attachment, or both and i will pass it back anonymously');
+    await message.channel.send({
+      embeds: [infoBox('Need Something To Relay', 'Send text, an attachment, or both and I will pass it back anonymously.')],
+    });
     return;
   }
 
   const modUser = await message.client.users.fetch(pending.moderatorId).catch(() => null);
 
   if (!modUser) {
-    await message.channel.send('i could not find the moderator who asked');
+    await message.channel.send({
+      embeds: [warnBox('Moderator Missing', 'I could not find the moderator who asked.')],
+    });
     return;
   }
 
-  const sent = await modUser.send([
-    `reply to your anonymous vent follow-up for submission ${pending.submissionId}`,
-    `thread: <#${pending.threadId}>`,
-    '',
-    'your question:',
-    pending.question,
-    '',
-    'their reply:',
-    text,
-  ].join('\n')).then(() => true).catch(() => false);
+  const sentBack = await modUser.send({
+    embeds: [infoBox('Anonymous Reply Received', [
+      `Submission: \`${pending.submissionId}\``,
+      `Thread: <#${pending.threadId}>`,
+      '',
+      `**Your question:**\n${pending.question}`,
+      '',
+      `**Their reply:**\n${text}`,
+    ])],
+  }).then(() => true).catch(() => false);
 
-  if (!sent) {
-    await message.channel.send('i could not DM the moderator who asked. ask them to enable DMs and try again.');
+  if (!sentBack) {
+    await message.channel.send({
+      embeds: [warnBox('Relay Failed', 'I could not DM the moderator who asked. Ask them to enable DMs and try again.')],
+    });
     return;
   }
 
   infoRequests.delete(message.author.id);
   saveInfoRequests();
-  await message.channel.send('sent back through the bot without showing your username');
+  await message.channel.send({
+    embeds: [okEmbed('Sent', [
+      'Your reply was passed along without showing your username.',
+      'There. Efficient enough for you?',
+    ])],
+  });
 }
 
 async function postAnonFollowup(message) {
-  await message.channel.send([
-    'follow-ups now go through the control message i DM when a vent is approved.',
-    'use the `Send Follow-Up` button on that DM so i know which thread to post to.',
-  ].join('\n'));
+  await message.channel.send({
+    embeds: [infoBox('Use The Control Message', [
+      'Follow-ups now go through the control message I DM when a vent is approved.',
+      'Use the `Send Follow-Up` button on that DM so I know which thread to post to.',
+      '',
+      'Yes, this really is the cleaner way to do it.',
+    ])],
+  });
 }
 
 async function postAnonFollowupForSubmission(interaction, submissionId, body) {
@@ -600,7 +654,7 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
 
   if (!submission || submission.status !== 'approved' || !submission.threadId) {
     await interaction.reply({
-      content: 'that vent is not open for follow-ups anymore',
+      embeds: [warnBox('Vent Closed', 'That vent is not open for follow-ups anymore.')],
       ephemeral: true,
     });
     return;
@@ -608,7 +662,7 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
 
   if (submission.userId !== interaction.user.id) {
     await interaction.reply({
-      content: 'that control message is not for you',
+      embeds: [warnBox('Not Yours', 'That control message is not for you.')],
       ephemeral: true,
     });
     return;
@@ -616,7 +670,7 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
 
   if (!body) {
     await interaction.reply({
-      content: 'type a follow-up first',
+      embeds: [warnBox('Need A Follow-Up', 'Type a follow-up first.')],
       ephemeral: true,
     });
     return;
@@ -624,7 +678,7 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
 
   if (body.length > FOLLOW_UP_LIMIT) {
     await interaction.reply({
-      content: `keep follow-ups under ${FOLLOW_UP_LIMIT} characters`,
+      embeds: [warnBox('Too Long', `Keep follow-ups under ${FOLLOW_UP_LIMIT} characters.`)],
       ephemeral: true,
     });
     return;
@@ -635,7 +689,7 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
   if (!thread || !thread.isThread() || thread.archived || thread.locked) {
     removeSubmissionByThreadId(submission.threadId);
     await interaction.reply({
-      content: 'that vent thread is closed, so i did not post the follow-up',
+      embeds: [warnBox('Thread Closed', 'That vent thread is closed, so I did not post the follow-up.')],
       ephemeral: true,
     });
     return;
@@ -647,7 +701,7 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
 
   if (!sent) {
     await interaction.reply({
-      content: 'something broke while posting that follow-up',
+      embeds: [errEmbed('Post Failed', 'Something broke while posting that follow-up.')],
       ephemeral: true,
     });
     return;
@@ -655,7 +709,10 @@ async function postAnonFollowupForSubmission(interaction, submissionId, body) {
 
   threadLastActive[thread.id] = Date.now();
   await interaction.reply({
-    content: 'posted your anonymous follow-up',
+    embeds: [okEmbed('Follow-Up Posted', [
+      'Your anonymous follow-up was posted.',
+      'Try to appreciate the efficiency quietly.',
+    ])],
     ephemeral: true,
   });
 }
@@ -665,7 +722,7 @@ async function handleVentReplyButton(interaction) {
 
   if (!isApprovedSubmissionOwner(submissionId, interaction.user.id)) {
     await interaction.reply({
-      content: 'that control message is not active for you anymore',
+      embeds: [warnBox('Control Message Expired', 'That control message is not active for you anymore.')],
       ephemeral: true,
     });
     return;
@@ -692,7 +749,7 @@ async function handleVentReplyModal(interaction) {
 
   if (!isApprovedSubmissionOwner(submissionId, interaction.user.id)) {
     await interaction.reply({
-      content: 'that control message is not active for you anymore',
+      embeds: [warnBox('Control Message Expired', 'That control message is not active for you anymore.')],
       ephemeral: true,
     });
     return;

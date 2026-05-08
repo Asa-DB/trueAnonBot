@@ -8,6 +8,12 @@ const {
   TextInputStyle,
 } = require('discord.js');
 const { makeSubmissionId } = require('../utils/idGenerator');
+const {
+  errEmbed,
+  infoBox,
+  okEmbed,
+  warnBox,
+} = require('../utils/responseEmbeds');
 const runtimeStore = require('../utils/runtimeStore');
 
 const savedState = runtimeStore.readState();
@@ -151,7 +157,11 @@ async function openSubmitModal(interaction) {
 
   if (interaction.guildId && allowedChannels.length && !allowedChannels.includes(interaction.channelId)) {
     await interaction.reply({
-      content: `you can only use \`/submit\` in ${formatChannelList(allowedChannels)}`,
+      embeds: [warnBox('Wrong Channel', [
+        `You can only use \`/submit\` in ${formatChannelList(allowedChannels)}.`,
+        '',
+        'Try not to make me repeat myself, okay?',
+      ])],
       ephemeral: true,
     });
     return;
@@ -181,7 +191,7 @@ async function handleSubmitModal(interaction) {
 
   if (!modQueueChannelId) {
     await interaction.reply({
-      content: 'mod queue channel is not configured',
+      embeds: [errEmbed('Setup Problem', 'The mod queue channel is not configured.')],
       ephemeral: true,
     });
     return;
@@ -189,7 +199,7 @@ async function handleSubmitModal(interaction) {
 
   if (!targetGuildId) {
     await interaction.reply({
-      content: 'target guild is not configured',
+      embeds: [errEmbed('Setup Problem', 'The target guild is not configured.')],
       ephemeral: true,
     });
     return;
@@ -210,36 +220,38 @@ async function handleSubmitModal(interaction) {
     closedAt: null,
   };
 
-  const row = new ActionRowBuilder().addComponents(
+  const yesNoRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`submit:confirm:${data.submissionId}`)
-      .setLabel('yeah send it')
+      .setLabel('Send It')
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(`submit:cancel:${data.submissionId}`)
-      .setLabel('nah cancel')
+      .setLabel('Cancel')
       .setStyle(ButtonStyle.Secondary),
   );
 
   try {
-    // ask if they actually want this sent
     await interaction.user.send({
-      content: [
-        'hey, before i send this:',
-        '- your username stays hidden from the vent and from the normal mod review flow',
-        '- if mods need more information later, i can DM you and relay your reply without putting your username in the thread',
-        '- if your vent gets approved, i will DM you a control message you can use for anonymous follow-ups',
+      embeds: [infoBox('Before I Send This', [
+        'Your username stays hidden from the vent and from the normal mod review flow.',
+        'If mods need more information later, I can DM you and relay your reply without putting your username in the thread.',
+        'If your vent gets approved, I will DM you a control message for anonymous follow-ups.',
         '',
-        'send this to mods?',
+        '**Ready to send this to the mods?**',
         '',
         data.content,
-      ].join('\n'),
-      components: [row],
+        '',
+        'I-it is your call. I am just making the process less painful.',
+      ])],
+      components: [yesNoRow],
     });
   } catch (error) {
-    // if no dm just give up lol
     await interaction.reply({
-      content: 'cant dm you, enable dms or try again',
+      embeds: [errEmbed('DMs Closed', [
+        'I could not DM you.',
+        'Enable DMs for this server or message the bot directly, then try again.',
+      ])],
       ephemeral: true,
     });
     return;
@@ -251,7 +263,10 @@ async function handleSubmitModal(interaction) {
   });
 
   await interaction.reply({
-    content: 'check your dms first to confirm it',
+    embeds: [okEmbed('Check Your DMs', [
+      'I sent you a confirmation message.',
+      'Open it and press `Send It` if you want the vent forwarded.',
+    ])],
     ephemeral: true,
   });
 }
@@ -262,7 +277,10 @@ async function handleSubmitConfirmButton(interaction) {
 
   if (!current || current.dmUserId !== interaction.user.id) {
     await interaction.reply({
-      content: 'that submit prompt is dead now',
+      embeds: [warnBox('Prompt Expired', [
+        'That submit prompt is not active anymore.',
+        'Run `/submit` again if you still want to send something.',
+      ])],
       ephemeral: true,
     });
     return;
@@ -272,7 +290,11 @@ async function handleSubmitConfirmButton(interaction) {
 
   if (action === 'cancel') {
     await interaction.update({
-      content: 'cool, not sending it',
+      embeds: [infoBox('Not Sent', [
+        'Fine. I did not send it.',
+        'It is not like I was in a hurry anyway.',
+      ])],
+      content: '',
       components: [],
     });
     return;
@@ -282,7 +304,8 @@ async function handleSubmitConfirmButton(interaction) {
 
   if (!queue || !queue.isTextBased()) {
     await interaction.update({
-      content: 'could not reach the mod queue so i gave up',
+      embeds: [errEmbed('Queue Unavailable', 'I could not reach the mod queue, so the vent was not sent.')],
+      content: '',
       components: [],
     });
     return;
@@ -300,7 +323,11 @@ async function handleSubmitConfirmButton(interaction) {
   });
 
   await interaction.update({
-    content: 'sent to mods',
+    embeds: [okEmbed('Sent To Mods', [
+      'Your vent is in the review queue now.',
+      'There. Nicely done.',
+    ])],
+    content: '',
     components: [],
   });
 }

@@ -1,4 +1,5 @@
 const { handleSubmitModal, handleSubmitConfirmButton } = require('../handlers/submissionHandler');
+const { errEmbed, warnBox } = require('../utils/responseEmbeds');
 const {
   handleCloseButton,
   handleRejectModal,
@@ -20,7 +21,10 @@ module.exports = {
 
         if (!command) {
           await interaction.reply({
-            content: 'that command is not available anymore on this bot. run `npm run deploy` to refresh the slash commands.',
+            embeds: [warnBox('Command Missing', [
+              'That command is not available on this bot anymore.',
+              'Run `npm run deploy` to refresh the slash commands.',
+            ])],
             ephemeral: true,
           }).catch(() => null);
           return;
@@ -90,7 +94,7 @@ module.exports = {
       console.error(error);
 
       const reply = {
-        content: 'something broke on my side',
+        embeds: [errEmbed('Something Broke', 'Something broke on my side. Try again in a bit.')],
         ephemeral: true,
       };
 
