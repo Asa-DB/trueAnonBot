@@ -26,6 +26,36 @@ function readStickyMinutes(raw) {
   return num;
 }
 
+function readMinutes(raw, fallback) {
+  const num = Number(raw);
+
+  if (!Number.isFinite(num) || num <= 0) {
+    return fallback;
+  }
+
+  return num;
+}
+
+function readHour(raw, fallback) {
+  const num = Number(raw);
+
+  if (!Number.isInteger(num) || num < 0 || num > 23) {
+    return fallback;
+  }
+
+  return num;
+}
+
+function readMinute(raw, fallback) {
+  const num = Number(raw);
+
+  if (!Number.isInteger(num) || num < 0 || num > 59) {
+    return fallback;
+  }
+
+  return num;
+}
+
 function readMessage(raw) {
   return (raw || '')
     .replace(/\r\n/g, '\n')
@@ -52,6 +82,19 @@ client.botConfig = {
   stickyMessage: readMessage(process.env.STICKY_MESSAGE),
   stickyIntervalMs: readStickyMinutes(process.env.STICKY_INTERVAL_MINUTES) * 60 * 1000,
   modRoleId: process.env.MODROLE || '',
+  newsletterChannelId: process.env.NEWSLETTER_CHANNEL_ID || '',
+  newsletterPingRoleId: process.env.NEWSLETTER_PING_ROLE_ID || '',
+  newsletterSourceUrl: process.env.NEWSLETTER_SOURCE_URL || 'https://www.ytech.edu/news',
+  newsletterTitlePrefix: process.env.NEWSLETTER_TITLE_PREFIX || 'Spartan Review',
+  newsletterPollMs: readMinutes(process.env.NEWSLETTER_POLL_MINUTES, 30) * 60 * 1000,
+  qotdChannelId: process.env.QOTD_CHANNEL_ID || '',
+  qotdPingRoleId: process.env.QOTD_PING_ROLE_ID || '',
+  qotdHour: readHour(process.env.QOTD_HOUR_ET, 18),
+  qotdMinute: readMinute(process.env.QOTD_MINUTE_ET, 0),
+  qotdTimezone: process.env.QOTD_TIMEZONE || 'America/New_York',
+  qotdApiUrl: process.env.QOTD_API_URL || 'https://openrouter.ai/api/v1/chat/completions',
+  qotdApiKey: process.env.QOTD_API_KEY || process.env.OPENROUTER_API_KEY || '',
+  qotdModel: process.env.QOTD_MODEL || 'openrouter/free',
 };
 
 const commandsPath = path.join(__dirname, 'commands');

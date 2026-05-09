@@ -78,9 +78,42 @@ function getModDeniedMessage(interaction) {
   return 'You need `Manage Threads` for that.';
 }
 
+function buildVentControlRow(submissionId, disabled = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`vent:reply:${submissionId}`)
+      .setLabel('Send Follow-Up')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(disabled),
+    new ButtonBuilder()
+      .setCustomId(`vent:resolved:${submissionId}`)
+      .setLabel('Resolve')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(disabled),
+    new ButtonBuilder()
+      .setCustomId(`vent:close:${submissionId}`)
+      .setLabel('Close')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disabled),
+    new ButtonBuilder()
+      .setCustomId(`vent:delete:${submissionId}`)
+      .setLabel('Delete')
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(disabled),
+  );
+}
+
 async function updateReviewMessage(interaction, submission, extraText) {
   const updatedSubmission = getLiveSubmission(submission.submissionId) || submission;
-  let targetMessage = interaction.message || null;
+  let targetMessage = null;
+
+  if (
+    interaction.message
+    && interaction.message.channelId === submission.reviewChannelId
+    && interaction.message.id === submission.reviewMessageId
+  ) {
+    targetMessage = interaction.message;
+  }
 
   if (!targetMessage && submission.reviewChannelId && submission.reviewMessageId) {
     const reviewChannel = await interaction.client.channels.fetch(submission.reviewChannelId).catch(() => null);
@@ -190,26 +223,19 @@ async function approveSubmission(interaction, submission) {
   const sender = await interaction.client.users.fetch(submission.userId).catch(() => null);
 
   if (sender) {
-    const replyRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`vent:reply:${submission.submissionId}`)
-        .setLabel('Send Follow-Up')
-        .setStyle(ButtonStyle.Primary),
-    );
-
     await sender.send({
       embeds: [okEmbed('Your Vent Is Live', [
         'Your vent was approved and posted.',
         'It stays mostly anonymous to the public and moderators in normal server use.',
         '',
-        'Use the button below any time you want to send an anonymous follow-up to this thread.',
+        'Use these controls to send an anonymous follow-up or manage your own thread.',
         '',
         'If a moderator needs more information, the bot may DM you and relay your reply without showing your username in the thread.',
         'Discord and the bot host are still technical limits.',
         '',
         'I-it is not like I made this control button just for you or anything.',
       ])],
-      components: [replyRow],
+      components: [buildVentControlRow(submission.submissionId)],
     }).catch(() => null);
   }
 }
@@ -759,6 +785,135 @@ async function handleVentReplyModal(interaction) {
   await postAnonFollowupForSubmission(interaction, submissionId, body);
 }
 
+async function handleVentOwnerAction(interaction, action) {
+  const submissionId = interaction.customId.split(':')[2];
+  const submission = getLiveSubmission(submissionId);
+
+  if (!submission || submission.status !== 'approved' || !submission.threadId) {
+    await interaction.reply({
+      embeds: [warnBox('Control Message Expired', 'That control message is not active for you anymore.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (submission.userId !== interaction.user.id) {
+    await interaction.reply({
+      embeds: [warnBox('Not Yours', 'That control message is not for you.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const thread = await interaction.client.channels.fetch(submission.threadId).catch(() => null);
+
+  if (!thread || !thread.isThread()) {
+    removeSubmissionByThreadId(submission.threadId);
+    await interaction.reply({
+      embeds: [warnBox('Thread Missing', 'That vent thread is gone, so the control message is no longer active.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (action === 'delete') {
+    await thread.delete(`deleted by vent owner ${interaction.user.tag}`);
+
+    patchLiveSubmission(submission.submissionId, {
+      status: 'deleted',
+      deletedAt: new Date().toISOString(),
+      deletedBy: interaction.user.id,
+    });
+    await updateReviewMessage(
+      interaction,
+      submission,
+      `deleted by sender <@${interaction.user.id}>`,
+    ).catch(() => null);
+
+    clearInfoRequestForThread(thread.id);
+    delete threadLastActive[thread.id];
+    removeSubmissionByThreadId(thread.id);
+
+    await interaction.reply({
+      embeds: [okEmbed('Vent Deleted', 'Your forum post was deleted and the control message is now inactive.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (thread.archived || thread.locked) {
+    removeSubmissionByThreadId(submission.threadId);
+    await interaction.reply({
+      embeds: [warnBox('Thread Closed', 'That vent thread is already closed, so the control message is no longer active.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (action === 'resolved') {
+    await thread.setLocked(true, `resolved by vent owner ${interaction.user.tag}`);
+    await thread.setArchived(true, `resolved by vent owner ${interaction.user.tag}`);
+
+    patchLiveSubmission(submission.submissionId, {
+      status: 'resolved',
+      resolvedAt: new Date().toISOString(),
+      resolvedBy: interaction.user.id,
+      closedAt: new Date().toISOString(),
+      closedBy: interaction.user.id,
+    });
+    await updateReviewMessage(
+      interaction,
+      submission,
+      `resolved by sender <@${interaction.user.id}> | thread: <#${thread.id}>`,
+    ).catch(() => null);
+
+    clearInfoRequestForThread(thread.id);
+    delete threadLastActive[thread.id];
+    removeSubmissionByThreadId(thread.id);
+
+    await interaction.reply({
+      embeds: [okEmbed('Vent Resolved', 'Your forum post was marked resolved and the thread was closed.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await thread.setLocked(true, `closed by vent owner ${interaction.user.tag}`);
+  await thread.setArchived(true, `closed by vent owner ${interaction.user.tag}`);
+
+  patchLiveSubmission(submission.submissionId, {
+    status: 'closed',
+    closedAt: new Date().toISOString(),
+    closedBy: interaction.user.id,
+  });
+  await updateReviewMessage(
+    interaction,
+    submission,
+    `closed by sender <@${interaction.user.id}> | thread: <#${thread.id}>`,
+  ).catch(() => null);
+
+  clearInfoRequestForThread(thread.id);
+  delete threadLastActive[thread.id];
+  removeSubmissionByThreadId(thread.id);
+
+  await interaction.reply({
+    embeds: [okEmbed('Vent Closed', 'Your forum post was closed and the control message is now inactive.')],
+    ephemeral: true,
+  });
+}
+
+async function handleVentCloseButton(interaction) {
+  await handleVentOwnerAction(interaction, 'close');
+}
+
+async function handleVentResolvedButton(interaction) {
+  await handleVentOwnerAction(interaction, 'resolved');
+}
+
+async function handleVentDeleteButton(interaction) {
+  await handleVentOwnerAction(interaction, 'delete');
+}
+
 async function handleDirectMessage(message) {
   if (message.author.bot || message.guildId) {
     return;
@@ -852,8 +1007,11 @@ module.exports = {
   checkDeadThreads,
   handleDirectMessage,
   handleRejectModal,
+  handleVentCloseButton,
+  handleVentDeleteButton,
   handleVentReplyButton,
   handleVentReplyModal,
+  handleVentResolvedButton,
   handleResolvedButton,
   handleCloseButton,
   handleRequestMoreInfoButton,

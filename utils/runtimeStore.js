@@ -16,6 +16,8 @@ function ensureStateFile() {
         confirmQueue: [],
         livePosts: [],
         infoRequests: [],
+        newsletterState: {},
+        qotdState: {},
       }, null, 2),
     );
   }
@@ -32,6 +34,14 @@ function normalizeState(state) {
 
   if (!Array.isArray(state.infoRequests)) {
     state.infoRequests = [];
+  }
+
+  if (!state.newsletterState || typeof state.newsletterState !== 'object' || Array.isArray(state.newsletterState)) {
+    state.newsletterState = {};
+  }
+
+  if (!state.qotdState || typeof state.qotdState !== 'object' || Array.isArray(state.qotdState)) {
+    state.qotdState = {};
   }
 
   return state;
@@ -68,8 +78,22 @@ function saveInfoRequestState(infoRequests) {
   writeState(state);
 }
 
+function saveNewsletterState(newsletterState) {
+  const state = readState();
+  state.newsletterState = newsletterState || {};
+  writeState(state);
+}
+
+function saveQotdState(qotdState) {
+  const state = readState();
+  state.qotdState = qotdState || {};
+  writeState(state);
+}
+
 module.exports = {
   readState,
   saveInfoRequestState,
+  saveNewsletterState,
+  saveQotdState,
   saveSubmissionState,
 };

@@ -33,6 +33,20 @@ STICKY_MESSAGE="be respectful.
 no doxxing.
 mods review vents before posting."
 STICKY_INTERVAL_MINUTES=10
+NEWSLETTER_CHANNEL_ID=channel_id_for_spartan_review_posts
+NEWSLETTER_PING_ROLE_ID=role_id_to_ping_when_a_newsletter_posts
+NEWSLETTER_SOURCE_URL=https://www.ytech.edu/news
+NEWSLETTER_TITLE_PREFIX=Spartan Review
+NEWSLETTER_POLL_MINUTES=30
+QOTD_CHANNEL_ID=channel_id_for_daily_qotd
+QOTD_PING_ROLE_ID=role_id_to_ping_for_qotd
+QOTD_HOUR_ET=18
+QOTD_MINUTE_ET=0
+QOTD_TIMEZONE=America/New_York
+OPENROUTER_API_KEY=your_openrouter_api_key
+QOTD_API_KEY=
+QOTD_API_URL=https://openrouter.ai/api/v1/chat/completions
+QOTD_MODEL=openrouter/free
 ```
 
 - `VENT_COMMAND_CHANNEL_IDS`: comma-separated channel ids where `/submit` is allowed
@@ -42,6 +56,20 @@ STICKY_INTERVAL_MINUTES=10
 - `STICKY_CHANNEL_IDS`: comma-separated channel ids where the bot keeps reposting the sticky
 - `STICKY_MESSAGE`: sticky text; you can write it as a quoted multiline value, and `\n` still works too
 - `STICKY_INTERVAL_MINUTES`: how often the bot deletes the old sticky and posts a new one
+- `NEWSLETTER_CHANNEL_ID`: channel where new York Tech newsletter posts should be sent
+- `NEWSLETTER_PING_ROLE_ID`: optional role id to mention when a new newsletter is posted
+- `NEWSLETTER_SOURCE_URL`: page to poll for newsletter articles; defaults to `https://www.ytech.edu/news`
+- `NEWSLETTER_TITLE_PREFIX`: title prefix the watcher looks for; defaults to `Spartan Review`
+- `NEWSLETTER_POLL_MINUTES`: how often to check for a new newsletter issue
+- `QOTD_CHANNEL_ID`: channel where the daily question should be posted
+- `QOTD_PING_ROLE_ID`: optional role id to mention with the daily question
+- `QOTD_HOUR_ET`: target hour in Eastern Time, using 24-hour time; `18` means 6:00 PM
+- `QOTD_MINUTE_ET`: target minute in Eastern Time
+- `QOTD_TIMEZONE`: defaults to `America/New_York`
+- `OPENROUTER_API_KEY`: OpenRouter API key; the QOTD feature will use this automatically if `QOTD_API_KEY` is blank
+- `QOTD_API_KEY`: optional dedicated API key just for QOTD requests
+- `QOTD_API_URL`: defaults to OpenRouter chat completions at `https://openrouter.ai/api/v1/chat/completions`
+- `QOTD_MODEL`: defaults to `openrouter/free`
 
 ## what it does
 
@@ -52,11 +80,32 @@ STICKY_INTERVAL_MINUTES=10
 - the mod review message has approve and reject buttons
 - rejection can include an optional typed-out moderator reason that gets DMd back
 - approval creates a forum post and keeps the sender hidden from the public thread
-- after approval, the original poster gets a DM control message for anonymous follow-ups
+- after approval, the original poster gets a DM control panel for anonymous follow-ups and thread actions
+- the user control panel can post follow-ups and let the original poster close, resolve, or delete their own thread
 - moderators can request more information and the bot relays the answer back in DMs
 - mods can close or resolve a thread with buttons
 - dead threads get auto-locked after 8 hours with no new messages
 - optional sticky messages can be reposted on a timer in one channel
+- optional York Tech newsletter watching can post new Spartan Review issues as embeds in a channel
+- optional AI-powered daily QOTD can post once a day on an Eastern Time schedule
+
+## newsletter watcher
+
+- this polls the York Tech news page and looks for the newest article whose title starts with `Spartan Review`
+- when it finds a new issue, it sends a polished embed with buttons to open the article
+- if `NEWSLETTER_PING_ROLE_ID` is set, that role gets pinged with the post
+- on the first startup with newsletter watching enabled, the bot records the current latest issue and waits for the next new one instead of reposting the existing article
+
+## qotd
+
+- this uses an API key and defaults to OpenRouter's `openrouter/free` router
+- by default it checks every minute and posts once per day at `6:00 PM` Eastern
+- if the bot is offline at exactly 6:00 PM, it will post later the same evening when the bot comes back up
+- if `QOTD_PING_ROLE_ID` is set, that role gets pinged with the question
+- each QOTD post immediately opens its own thread for replies
+- it keeps a short history of recent questions so the AI prompt can avoid obvious repeats
+- if the API request fails, it waits 5 minutes and tries again
+- if you want a different model later, set `QOTD_MODEL` to another OpenRouter model id or a `:free` variant
 
 ## how anonymous it really is
 
