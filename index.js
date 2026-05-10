@@ -107,6 +107,9 @@ client.botConfig = {
   qotdApiKey: process.env.QOTD_API_KEY || process.env.OPENROUTER_API_KEY || '',
   qotdModel: process.env.QOTD_MODEL || 'openrouter/free',
   gradeRoleIds: readGradeRoleIds(process.env),
+  supportRoleId: process.env.SUPPORT_ROLE_ID || process.env.TOSS_SUPPORT_ROLE_ID || '',
+  tossRollId: process.env.TOSS_ROLL || '',
+  tossModRoleId: process.env.TOSS_MOD_ROLE_ID || process.env.MODROLE || '',
 };
 
 const commandsPath = path.join(__dirname, 'commands');

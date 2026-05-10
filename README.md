@@ -28,6 +28,9 @@ VENT_COMMAND_CHANNEL_IDS=channel_id_one,channel_id_two
 VENT_REVIEW_CHANNEL_ID=private_mod_channel_id
 VENT_FORUM_CHANNEL_ID=forum_channel_id
 MODROLE=moderator_role_id
+SUPPORT_ROLE_ID=shared_support_role_id
+TOSS_ROLL=restricted_role_id_for_tossed_members
+TOSS_MOD_ROLE_ID=
 STICKY_CHANNEL_IDS=channel_id_for_sticky_message,another_channel_id
 STICKY_MESSAGE="be respectful.
 no doxxing.
@@ -58,6 +61,9 @@ GRADE_ROLE_GRADUATE_ID=role_id_for_graduate
 - `VENT_REVIEW_CHANNEL_ID`: private mod channel where approve/reject messages go
 - `VENT_FORUM_CHANNEL_ID`: forum channel where approved vents get posted
 - `MODROLE`: optional role id that gates approve, reject, request-more-info, resolve, and close actions
+- `SUPPORT_ROLE_ID`: shared support/staff role; toss rooms ping this role and grant it access
+- `TOSS_ROLL`: restricted toss role the bot adds during a toss; configure your normal channels so this role is denied access
+- `TOSS_MOD_ROLE_ID`: optional role id that gates `/toss`, `/untoss`, and the toss room control panel; falls back to `MODROLE`, then `Manage Channels`
 - `STICKY_CHANNEL_IDS`: comma-separated channel ids where the bot keeps reposting the sticky
 - `STICKY_MESSAGE`: sticky text; you can write it as a quoted multiline value, and `\n` still works too
 - `STICKY_INTERVAL_MINUTES`: how often the bot deletes the old sticky and posts a new one
@@ -82,6 +88,9 @@ GRADE_ROLE_GRADUATE_ID=role_id_for_graduate
 - `/submit` opens a modal for an anonymous vent
 - `/submit` can also be used in bot DMs
 - `/reply` explains how anonymous follow-ups work
+- `/toss` opens a private support room for one member, pings the shared support role, and temporarily strips the member's normal server roles until staff close the room
+- `/toss` also applies the configured toss role so the member can be blocked from the rest of the server while still seeing the toss room
+- `/untoss` restores the member's saved roles and closes out the private toss room
 - the bot asks for DM confirmation before it sends anything
 - the mod review message has approve and reject buttons
 - rejection can include an optional typed-out moderator reason that gets DMd back
@@ -90,6 +99,7 @@ GRADE_ROLE_GRADUATE_ID=role_id_for_graduate
 - the user control panel can post follow-ups and let the original poster close, resolve, or delete their own thread
 - moderators can request more information and the bot relays the answer back in DMs
 - mods can close or resolve a thread with buttons
+- toss rooms open with a built-in control panel so staff can close the room or temporarily lock/unlock the member inside it
 - dead threads get auto-locked after 8 hours with no new messages
 - optional sticky messages can be reposted on a timer in one channel
 - optional York Tech newsletter watching can post new Spartan Review issues as embeds in a channel
@@ -144,6 +154,13 @@ the bot should be able to:
 if `MODROLE` is set, only that role can use the sensitive mod controls
 
 if `MODROLE` is not set, those controls fall back to `Manage Threads`
+
+for toss rooms, the bot also needs:
+
+- `Manage Channels`
+- `Manage Roles`
+- its highest bot role placed above every role that might need to be removed from a tossed member
+- a restricted role configured in `TOSS_ROLL`, with your normal channels denied to that role
 
 for `/promotegrades`, the bot also needs:
 

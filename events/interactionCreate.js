@@ -1,4 +1,5 @@
 const { handleSubmitModal, handleSubmitConfirmButton } = require('../handlers/submissionHandler');
+const { handleTossButton } = require('../handlers/tossHandler');
 const { errEmbed, warnBox } = require('../utils/responseEmbeds');
 const {
   handleCloseButton,
@@ -105,6 +106,10 @@ module.exports = {
         if (interaction.customId.startsWith('vent:delete:')) {
           await handleVentDeleteButton(interaction);
           return;
+        }
+
+        if (interaction.customId.startsWith('toss:')) {
+          await handleTossButton(interaction);
         }
       }
     } catch (error) {

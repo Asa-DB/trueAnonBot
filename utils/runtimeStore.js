@@ -18,6 +18,7 @@ function ensureStateFile() {
         infoRequests: [],
         newsletterState: {},
         qotdState: {},
+        tossRooms: [],
       }, null, 2),
     );
   }
@@ -42,6 +43,10 @@ function normalizeState(state) {
 
   if (!state.qotdState || typeof state.qotdState !== 'object' || Array.isArray(state.qotdState)) {
     state.qotdState = {};
+  }
+
+  if (!Array.isArray(state.tossRooms)) {
+    state.tossRooms = [];
   }
 
   return state;
@@ -90,10 +95,17 @@ function saveQotdState(qotdState) {
   writeState(state);
 }
 
+function saveTossState(tossMap) {
+  const state = readState();
+  state.tossRooms = Array.from(tossMap.values());
+  writeState(state);
+}
+
 module.exports = {
   readState,
   saveInfoRequestState,
   saveNewsletterState,
   saveQotdState,
   saveSubmissionState,
+  saveTossState,
 };
