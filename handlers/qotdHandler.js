@@ -5,6 +5,7 @@ const CHECK_EVERY_MS = 60 * 1000;
 const API_TIMEOUT_MS = 30_000;
 const RECENT_QOTD_LIMIT = 10;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
+const MAX_QOTD_ATTEMPTS = 3;
 
 const savedStuff = runtimeStore.readState();
 const qotdState = {
@@ -74,7 +75,107 @@ function cleanupQuestion(text) {
   cleaned = cleaned.replace(/\n+/g, ' ');
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
 
+  if (cleaned && !/[?؟]$/.test(cleaned)) {
+    cleaned = `${cleaned.replace(/[.!]+$/g, '')}?`;
+  }
+
   return cleaned;
+}
+
+function normalizeQuestion(text) {
+  return cleanupQuestion(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function isRecentQuestion(question) {
+  const normalized = normalizeQuestion(question);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return qotdState.recentQuestions.some((item) => normalizeQuestion(item) === normalized);
+}
+
+function hasPromptLeak(question) {
+  const lowered = question.toLowerCase();
+  const markers = [
+    'write one question of the day',
+    'return only',
+    'examples:',
+    'recent questions to avoid',
+    'under 20 words',
+    'therapy-speak',
+    'icebreakers',
+    'conversational',
+    'fake-deep',
+    'brand prompt',
+    'one sentence',
+    'timezone context',
+  ];
+
+  return markers.some((marker) => lowered.includes(marker));
+}
+
+function isValidQuestion(question) {
+  if (!question) {
+    return false;
+  }
+
+  const wordCount = question.split(/\s+/).filter(Boolean).length;
+  const questionMarkCount = (question.match(/\?/g) || []).length;
+
+  if (question.length < 18 || question.length > 140) {
+    return false;
+  }
+
+  if (wordCount < 5 || wordCount > 24) {
+    return false;
+  }
+
+  if (!question.endsWith('?') || questionMarkCount !== 1) {
+    return false;
+  }
+
+  if (/[.!]\s+\S/.test(question)) {
+    return false;
+  }
+
+  if (hasPromptLeak(question)) {
+    return false;
+  }
+
+  if (isRecentQuestion(question)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isSnowflake(value) {
+  return typeof value === 'string' && /^\d{16,20}$/.test(value);
+}
+
+function parseJsonObject(text) {
+  if (!text) {
+    return null;
+  }
+
+  if (typeof text === 'object' && !Array.isArray(text)) {
+    return text;
+  }
+
+  if (typeof text !== 'string') {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function makePrompt(config) {
@@ -84,11 +185,18 @@ function makePrompt(config) {
   const vibeLine = getQuietThemeHint(config.qotdTimezone);
 
   return [
-    'Write one question of the day for a Discord server.',
-    'Make it insightful, unique, a little surprising, and actually good for conversation.',
-    'Avoid boring icebreakers, yes/no questions, and fake-deep fluff.',
+    'Generate four distinct question-of-the-day candidates for a Discord server.',
+    'Write them like a real person dropping a good question into chat, not like a brand prompt or a therapy worksheet.',
+    'Make them conversational, specific, and easy to answer without feeling shallow.',
+    'Avoid boring icebreakers, yes/no questions, fake-deep fluff, therapy-speak, and overly polished wording.',
+    'Each question must be one sentence, end with a question mark, and stay under 20 words.',
     'Do not repeat or closely echo any recent questions.',
-    'Return only the final question. No label. No numbering. No quotation marks.',
+    'Order the candidates from strongest to weakest.',
+    '',
+    'Good style examples:',
+    '- What is a tiny hill you will die on for no good reason?',
+    '- What is something you were sure was true as a kid that makes no sense now?',
+    '- Which job would you be weirdly good at even with zero experience?',
     '',
     'Recent questions to avoid:',
     recent,
@@ -133,52 +241,96 @@ function getQuietThemeHint(timeZone) {
 }
 
 async function askForQotd(config) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  for (let attempt = 0; attempt < MAX_QOTD_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
-  try {
-    const response = await fetch(config.qotdApiUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.qotdApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: config.qotdModel,
-        messages: [
-          {
-            role: 'system',
-            content: 'You write strong, natural question-of-the-day prompts for online communities.',
+    try {
+      const response = await fetch(config.qotdApiUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.qotdApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: config.qotdModel,
+          provider: {
+            require_parameters: true,
           },
-          {
-            role: 'user',
-            content: makePrompt(config),
+          messages: [
+            {
+              role: 'system',
+              content: 'You write natural, human-sounding question-of-the-day prompts for online communities. Return structured data only.',
+            },
+            {
+              role: 'user',
+              content: makePrompt(config),
+            },
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'qotd_candidates',
+              strict: true,
+              schema: {
+                type: 'object',
+                properties: {
+                  candidates: {
+                    type: 'array',
+                    minItems: 4,
+                    maxItems: 4,
+                    items: {
+                      type: 'object',
+                      properties: {
+                        question: {
+                          type: 'string',
+                          description: 'A single natural-sounding question of the day.',
+                        },
+                      },
+                      required: ['question'],
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                required: ['candidates'],
+                additionalProperties: false,
+              },
+            },
           },
-        ],
-        temperature: 1,
-        max_tokens: 120,
-        stream: false,
-      }),
-    });
+          plugins: [{ id: 'response-healing' }],
+          temperature: 1.1,
+          max_tokens: 220,
+          stream: false,
+        }),
+      });
 
-    if (!response.ok) {
-      const problemText = await response.text().catch(() => '');
-      throw new Error(`qotd api failed with status ${response.status}${problemText ? `: ${problemText}` : ''}`);
+      if (!response.ok) {
+        const problemText = await response.text().catch(() => '');
+        throw new Error(`qotd api failed with status ${response.status}${problemText ? `: ${problemText}` : ''}`);
+      }
+
+      const data = await response.json();
+      const rawText = data?.choices?.[0]?.message?.content || '';
+      const parsed = parseJsonObject(rawText);
+      const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+
+      for (const candidate of candidates) {
+        const question = cleanupQuestion(candidate?.question || '');
+
+        if (isValidQuestion(question)) {
+          return question;
+        }
+      }
+
+      console.warn(`qotd api returned no valid candidates on attempt ${attempt + 1}`);
+      console.warn(rawText);
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const data = await response.json();
-    const rawText = data?.choices?.[0]?.message?.content || '';
-    const question = cleanupQuestion(rawText);
-
-    if (!question) {
-      throw new Error('qotd api returned an empty question');
-    }
-
-    return question;
-  } finally {
-    clearTimeout(timeout);
   }
+
+  throw new Error('qotd api returned no valid question candidates');
 }
 
 function shortTime(num) {
@@ -203,28 +355,20 @@ function prettyDate(rawIso) {
 
 function buildQotdEmbed(question, nowBits) {
   const prettyToday = prettyDate(new Date().toISOString());
+  const postedAt = `${shortTime(nowBits.hour)}:${shortTime(nowBits.minute)} ET`;
 
   const embed = new EmbedBuilder()
-    .setColor(0xe0af68)
-    .setTitle('Question Of The Day')
-    .setDescription(`**${question}**`)
-    .addFields(
-      {
-        name: 'Answer Prompt',
-        value: 'Throw your answer in chat. Serious, funny, personal, or weird all work.',
-      },
-      {
-        name: 'Posted',
-        value: `${shortTime(nowBits.hour)}:${shortTime(nowBits.minute)} ET`,
-        inline: true,
-      },
-    );
+    .setColor(0xd1a15d)
+    .setTitle('QOTD')
+    .setDescription(question);
 
-  if (prettyToday) {
-    embed.setFooter({
-      text: prettyToday,
-    });
-  }
+  const footerText = prettyToday
+    ? `${prettyToday} • ${postedAt}`
+    : postedAt;
+
+  embed.setFooter({
+    text: footerText,
+  });
 
   return embed;
 }
@@ -276,11 +420,11 @@ async function sendQotd(client, question, nowBits) {
     throw new Error('qotd channel is missing or not text-based');
   }
 
-  const roleId = client.botConfig.qotdPingRoleId;
-  const pingText = roleId ? `<@&${roleId}> ` : '';
-
+  const roleId = isSnowflake(client.botConfig.qotdPingRoleId)
+    ? client.botConfig.qotdPingRoleId
+    : '';
   const sentMessage = await channel.send({
-    content: `${pingText}New QOTD just dropped.`,
+    content: roleId ? `<@&${roleId}>` : undefined,
     allowedMentions: roleId ? { roles: [roleId] } : undefined,
     embeds: [buildQotdEmbed(question, nowBits)],
   });
@@ -291,7 +435,40 @@ async function sendQotd(client, question, nowBits) {
     reason: 'daily qotd discussion thread',
   });
 
-  await thread.send('Reply here with your answer so the main channel does not get too messy.');
+  await thread.send('Use this thread for answers so the main channel stays readable.');
+}
+
+async function triggerQotd(client, overrides = {}) {
+  const config = {
+    ...client.botConfig,
+    ...overrides,
+  };
+
+  if (!config.qotdChannelId) {
+    throw new Error('missing qotd channel id');
+  }
+
+  if (!config.qotdApiKey) {
+    throw new Error('missing qotd api key');
+  }
+
+  const nowBits = getEtTimeBits(config.qotdTimezone || 'America/New_York');
+  const question = await askForQotd(config);
+  const previousConfig = client.botConfig;
+
+  try {
+    client.botConfig = config;
+    await sendQotd(client, question, nowBits);
+  } finally {
+    client.botConfig = previousConfig;
+  }
+
+  rememberQuestion(question, nowBits.dayKey);
+
+  return {
+    nowBits,
+    question,
+  };
 }
 
 async function checkQotd(client) {
@@ -312,9 +489,9 @@ async function checkQotd(client) {
       return;
     }
 
-    const question = await askForQotd(config);
-    await sendQotd(client, question, nowBits);
-    rememberQuestion(question, nowBits.dayKey);
+    await triggerQotd(client, {
+      qotdTimezone: config.qotdTimezone,
+    });
   } catch (error) {
     console.error('qotd generation failed, trying again in 5 minutes');
     console.error(error);
@@ -336,6 +513,8 @@ function startQotdLoop(client) {
 }
 
 module.exports = {
+  buildQotdEmbed,
   checkQotd,
+  triggerQotd,
   startQotdLoop,
 };
