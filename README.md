@@ -47,6 +47,11 @@ OPENROUTER_API_KEY=your_openrouter_api_key
 QOTD_API_KEY=
 QOTD_API_URL=https://openrouter.ai/api/v1/chat/completions
 QOTD_MODEL=openrouter/free
+GRADE_ROLE_FRESHMAN_ID=role_id_for_freshman
+GRADE_ROLE_SOPHOMORE_ID=role_id_for_sophomore
+GRADE_ROLE_JUNIOR_ID=role_id_for_junior
+GRADE_ROLE_SENIOR_ID=role_id_for_senior
+GRADE_ROLE_GRADUATE_ID=role_id_for_graduate
 ```
 
 - `VENT_COMMAND_CHANNEL_IDS`: comma-separated channel ids where `/submit` is allowed
@@ -70,6 +75,7 @@ QOTD_MODEL=openrouter/free
 - `QOTD_API_KEY`: optional dedicated API key just for QOTD requests
 - `QOTD_API_URL`: defaults to OpenRouter chat completions at `https://openrouter.ai/api/v1/chat/completions`
 - `QOTD_MODEL`: defaults to `openrouter/free`
+- `GRADE_ROLE_FRESHMAN_ID` through `GRADE_ROLE_GRADUATE_ID`: the five class-role ids used by `/promotegrades`
 
 ## what it does
 
@@ -88,6 +94,7 @@ QOTD_MODEL=openrouter/free
 - optional sticky messages can be reposted on a timer in one channel
 - optional York Tech newsletter watching can post new Spartan Review issues as embeds in a channel
 - optional AI-powered daily QOTD can post once a day on an Eastern Time schedule
+- `/promotegrades` lets the server owner roll class roles forward by one year and posts an `@everyone` graduation embed
 
 ## newsletter watcher
 
@@ -137,3 +144,9 @@ the bot should be able to:
 if `MODROLE` is set, only that role can use the sensitive mod controls
 
 if `MODROLE` is not set, those controls fall back to `Manage Threads`
+
+for `/promotegrades`, the bot also needs:
+
+- `Manage Roles`
+- the `Server Members Intent` enabled in the Discord developer portal
+- its highest bot role placed above all five configured class roles

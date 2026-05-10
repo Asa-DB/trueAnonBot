@@ -62,9 +62,20 @@ function readMessage(raw) {
     .replace(/\\n/g, '\n');
 }
 
+function readGradeRoleIds(env) {
+  return {
+    freshman: env.GRADE_ROLE_FRESHMAN_ID || '',
+    sophomore: env.GRADE_ROLE_SOPHOMORE_ID || '',
+    junior: env.GRADE_ROLE_JUNIOR_ID || '',
+    senior: env.GRADE_ROLE_SENIOR_ID || '',
+    graduate: env.GRADE_ROLE_GRADUATE_ID || '',
+  };
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
@@ -95,6 +106,7 @@ client.botConfig = {
   qotdApiUrl: process.env.QOTD_API_URL || 'https://openrouter.ai/api/v1/chat/completions',
   qotdApiKey: process.env.QOTD_API_KEY || process.env.OPENROUTER_API_KEY || '',
   qotdModel: process.env.QOTD_MODEL || 'openrouter/free',
+  gradeRoleIds: readGradeRoleIds(process.env),
 };
 
 const commandsPath = path.join(__dirname, 'commands');
