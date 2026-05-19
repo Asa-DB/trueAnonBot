@@ -120,7 +120,7 @@ GRADE_ROLE_GRADUATE_ID=role_id_for_graduate
 - if the bot is offline at exactly 6:00 PM, it will post later the same evening when the bot comes back up
 - if `QOTD_PING_ROLE_ID` is set, that role gets pinged with the question
 - each QOTD post immediately opens its own thread for replies
-- it keeps a short history of recent questions so the AI prompt can avoid obvious repeats
+- it keeps a longer recent-question history and rejects obvious cousin-questions, not just exact repeats
 - if the API request fails, it waits 5 minutes and tries again
 - if you want a different model later, set `QOTD_MODEL` to another OpenRouter model id or a `:free` variant
 

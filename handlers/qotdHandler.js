@@ -3,9 +3,132 @@ const runtimeStore = require('../utils/runtimeStore');
 
 const CHECK_EVERY_MS = 60 * 1000;
 const API_TIMEOUT_MS = 30_000;
-const RECENT_QOTD_LIMIT = 10;
+const RECENT_QOTD_LIMIT = 30;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
 const MAX_QOTD_ATTEMPTS = 3;
+
+const BORING_QOTD_WORDS = new Set([
+  'about',
+  'actually',
+  'after',
+  'again',
+  'almost',
+  'also',
+  'always',
+  'anyone',
+  'anything',
+  'because',
+  'been',
+  'being',
+  'could',
+  'day',
+  'does',
+  'even',
+  'ever',
+  'everyone',
+  'feel',
+  'from',
+  'good',
+  'have',
+  'into',
+  'just',
+  'kind',
+  'like',
+  'little',
+  'make',
+  'most',
+  'much',
+  'need',
+  'over',
+  'really',
+  'some',
+  'someone',
+  'something',
+  'still',
+  'that',
+  'their',
+  'them',
+  'then',
+  'there',
+  'thing',
+  'think',
+  'this',
+  'very',
+  'what',
+  'when',
+  'where',
+  'which',
+  'while',
+  'with',
+  'would',
+  'your',
+  'youre',
+]);
+
+const QOTD_THEME_GROUPS = [
+  ['kid', 'kids', 'child', 'childhood', 'younger', 'teen', 'school', 'teacher', 'parent'],
+  ['habit', 'routine', 'ritual', 'daily', 'pandemic', 'picked up'],
+  ['food', 'snack', 'meal', 'drink', 'restaurant', 'cook', 'kitchen'],
+  ['movie', 'show', 'song', 'album', 'game', 'book', 'episode', 'character'],
+  ['job', 'work', 'career', 'coworker', 'boss', 'experience'],
+  ['hill', 'opinion', 'defend', 'overrated', 'underrated', 'hot take'],
+  ['hypothetical', 'superpower', 'time travel', 'if you could', 'would you rather'],
+  ['room', 'desk', 'closet', 'object', 'item', 'own'],
+  ['skill', 'talent', 'weirdly good', 'bad at', 'learn'],
+  ['memory', 'remember', 'nostalgia', 'past', 'old'],
+  ['petty', 'annoying', 'minor', 'complaint', 'small'],
+];
+
+const QOTD_FLAVORS = [
+  {
+    name: 'tiny nonsense',
+    direction: 'Ask about a small, stupidly specific preference or harmless daily-life grievance.',
+    examples: [
+      'What tiny inconvenience makes you act like the universe personally targeted you?',
+      'What normal thing do you have an unnecessarily strong opinion about?',
+    ],
+  },
+  {
+    name: 'odd little lore',
+    direction: 'Ask for a short personal story, weird family rule, or oddly specific life detail.',
+    examples: [
+      'What is the strangest rule your house had growing up?',
+      'What is a tiny piece of personal lore that sounds fake but is real?',
+    ],
+  },
+  {
+    name: 'taste crimes',
+    direction: 'Ask about taste, food, media, objects, or aesthetics without making it a favorite-color question.',
+    examples: [
+      'What snack pairing would get you judged even though it absolutely works?',
+      'What ugly object do you secretly respect?',
+    ],
+  },
+  {
+    name: 'bad plans',
+    direction: 'Ask a mildly chaotic hypothetical that people can answer in one message.',
+    examples: [
+      'What terrible business would you start if profit did not matter?',
+      'What would your first law be if you were mayor for one extremely annoying day?',
+    ],
+  },
+  {
+    name: 'quiet confessions',
+    direction: 'Ask for a low-stakes confession, petty belief, or thing people rarely admit out loud.',
+    examples: [
+      'What is something harmless you pretend to understand but absolutely do not?',
+      'What small task makes you feel like you deserve a parade?',
+    ],
+  },
+  {
+    name: 'social weirdness',
+    direction: 'Ask about awkward social instincts, group-chat behavior, or tiny public embarrassments.',
+    examples: [
+      'What is your most irrational public-facing anxiety?',
+      'What group-chat message makes you immediately suspicious?',
+    ],
+  },
+];
 
 const savedStuff = runtimeStore.readState();
 const qotdState = {
@@ -13,7 +136,7 @@ const qotdState = {
   lastPostedAt: savedStuff.qotdState?.lastPostedAt || '',
   nextTryAt: savedStuff.qotdState?.nextTryAt || '',
   recentQuestions: Array.isArray(savedStuff.qotdState?.recentQuestions)
-    ? savedStuff.qotdState.recentQuestions
+    ? cleanStoredQuestions(savedStuff.qotdState.recentQuestions)
     : [],
 };
 
@@ -64,7 +187,7 @@ function shouldPostNow(config, nowBits) {
 }
 
 function cleanupQuestion(text) {
-  if (!text) {
+  if (!text || typeof text !== 'string') {
     return '';
   }
 
@@ -89,6 +212,69 @@ function normalizeQuestion(text) {
     .trim();
 }
 
+function cleanStoredQuestions(questions) {
+  return questions
+    .map((item) => cleanupQuestion(item))
+    .filter((item) => item && !hasPromptLeak(item))
+    .slice(0, RECENT_QOTD_LIMIT);
+}
+
+function getQuestionTokens(question) {
+  return normalizeQuestion(question)
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !BORING_QOTD_WORDS.has(word))
+    .map((word) => word.replace(/ies$/, 'y').replace(/s$/, ''));
+}
+
+function getSimilarityScore(left, right) {
+  const leftTokens = new Set(getQuestionTokens(left));
+  const rightTokens = new Set(getQuestionTokens(right));
+
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+
+  let overlap = 0;
+
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function getThemeGroups(question) {
+  const normalized = normalizeQuestion(question);
+
+  return QOTD_THEME_GROUPS
+    .filter((terms) => terms.some((term) => normalized.includes(term)))
+    .map((terms) => terms[0]);
+}
+
+function isSimilarQuestion(question, previousQuestion) {
+  const normalized = normalizeQuestion(question);
+  const previousNormalized = normalizeQuestion(previousQuestion);
+
+  if (!normalized || !previousNormalized) {
+    return false;
+  }
+
+  if (normalized === previousNormalized) {
+    return true;
+  }
+
+  if (getSimilarityScore(question, previousQuestion) >= 0.55) {
+    return true;
+  }
+
+  const themes = getThemeGroups(question);
+  const previousThemes = getThemeGroups(previousQuestion);
+
+  return themes.length > 0 && themes.some((theme) => previousThemes.includes(theme));
+}
+
 function isRecentQuestion(question) {
   const normalized = normalizeQuestion(question);
 
@@ -96,7 +282,7 @@ function isRecentQuestion(question) {
     return false;
   }
 
-  return qotdState.recentQuestions.some((item) => normalizeQuestion(item) === normalized);
+  return qotdState.recentQuestions.some((item) => isSimilarQuestion(question, item));
 }
 
 function hasPromptLeak(question) {
@@ -114,6 +300,12 @@ function hasPromptLeak(question) {
     'brand prompt',
     'one sentence',
     'timezone context',
+    'generate four',
+    'structured data',
+    'corporate sparkle',
+    'therapy worksheet',
+    'calendar filler',
+    'today\'s lane',
   ];
 
   return markers.some((marker) => lowered.includes(marker));
@@ -178,25 +370,42 @@ function parseJsonObject(text) {
   }
 }
 
+function hashText(text) {
+  let hash = 0;
+
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+
+  return hash;
+}
+
+function getQotdFlavor(timeZone) {
+  const nowBits = getEtTimeBits(timeZone);
+  return QOTD_FLAVORS[hashText(nowBits.dayKey) % QOTD_FLAVORS.length];
+}
+
 function makePrompt(config) {
   const recent = qotdState.recentQuestions.length
     ? qotdState.recentQuestions.map((item, i) => `${i + 1}. ${item}`).join('\n')
     : 'None yet';
   const vibeLine = getQuietThemeHint(config.qotdTimezone);
+  const flavor = getQotdFlavor(config.qotdTimezone);
+  const flavorExamples = flavor.examples.map((item) => `- ${item}`).join('\n');
 
   return [
     'Generate four distinct question-of-the-day candidates for a Discord server.',
-    'Write them like a real person dropping a good question into chat, not like a brand prompt or a therapy worksheet.',
-    'Make them conversational, specific, and easy to answer without feeling shallow.',
-    'Avoid boring icebreakers, yes/no questions, fake-deep fluff, therapy-speak, and overly polished wording.',
+    'Write like a real person in chat: casual, a little silly, mildly unpolished, and specific.',
+    'No corporate sparkle. No therapy worksheet energy. No "what are you grateful for" calendar filler.',
+    `Today's lane: ${flavor.name}. ${flavor.direction}`,
+    'Do not reuse the same angle, topic family, sentence frame, or "what is something..." rhythm from recent questions.',
+    'Make each candidate feel like it came from a different brain with a different minor problem.',
     'Each question must be one sentence, end with a question mark, and stay under 20 words.',
     'Do not repeat or closely echo any recent questions.',
     'Order the candidates from strongest to weakest.',
     '',
-    'Good style examples:',
-    '- What is a tiny hill you will die on for no good reason?',
-    '- What is something you were sure was true as a kid that makes no sense now?',
-    '- Which job would you be weirdly good at even with zero experience?',
+    'Style examples for today, not templates to copy:',
+    flavorExamples,
     '',
     'Recent questions to avoid:',
     recent,
